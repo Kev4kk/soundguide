@@ -14,7 +14,9 @@ struct ContentView: View {
 
     private var setupOverlay: some View {
         VStack {
-            Text(ar.status.isEmpty ? "Aim the + at the floor or a surface" : ar.status)
+            Text(ar.trackingNormal
+                 ? (ar.status.isEmpty ? "Aim the + at the floor or a surface" : ar.status)
+                 : "Getting AR ready…")
                 .font(.headline).padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding(.top)

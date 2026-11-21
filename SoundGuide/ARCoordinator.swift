@@ -113,11 +113,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         config.planeDetection = [.horizontal, .vertical]
         arView.session.run(config)
 
-        let coaching = ARCoachingOverlayView()
-        coaching.session = arView.session
-        coaching.goal = .anyPlane
-        coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        arView.addSubview(coaching)
+        // Show the live camera and setup UI while world tracking initializes.
         if tuning.useHeadTracking { head.start() }
         visionQueue.async { [weak self] in
             do {
