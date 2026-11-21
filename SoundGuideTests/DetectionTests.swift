@@ -286,6 +286,16 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(try XCTUnwrap(o.displayY).upperBound, 1.65, accuracy: 0.01)
     }
 
+    func testCrowdedSceneBoundsOnlyTheOverlay() {
+        let all = (0..<2_000).map { i in
+            Detected(obstacle: Obstacle(center: [Float(i), 0, 0], halfSize: [0.1, 0.1]), source: .points)
+        }
+        let visible = ARController.nearestHitboxes(all, to: [1999, 0])
+        XCTAssertEqual(visible.count, 32)
+        XCTAssertEqual(visible.first, all.last)
+        XCTAssertEqual(visible.last, all[1968])
+    }
+
     // MARK: Object tracks
 
     func testTracksConfirmAfterSightingsAndMerge() {

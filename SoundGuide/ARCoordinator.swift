@@ -305,17 +305,20 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    /// Reuse the outline's anchor, mesh and edges; inference only moves or resizes them.
+    /// One shared cube mesh drawn in wireframe, not twelve render entities per box.
     private final class Hitbox {
         let anchor = AnchorEntity(world: .zero)
-        private let frame = Entity()
-        private let edges: [ModelEntity]
+        private let frame: ModelEntity
         private var obstacle: Obstacle?
 
         init(mesh: MeshResource, color: UIColor) {
-            let material = UnlitMaterial(color: color)
-            edges = (0..<12).map { _ in ModelEntity(mesh: mesh, materials: [material]) }
-            edges.forEach { frame.addChild($0) }
+            var material = UnlitMaterial(color: color)
+            if #available(iOS 18.0, *) {
+                material.triangleFillMode = .lines
+            } else {
+                material.blending = .transparent(opacity: 0.12)
+            }
+            frame = ModelEntity(mesh: mesh, materials: [material])
             anchor.addChild(frame)
         }
 
@@ -326,20 +329,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             let half = SIMD3(o.halfSize.x, (y.upperBound - y.lowerBound) / 2, o.halfSize.y)
             frame.position = SIMD3(o.center.x, y.lowerBound + half.y, o.center.z)
             frame.orientation = simd_quatf(angle: o.yaw, axis: [0, 1, 0])
-            let thickness: Float = 0.015
-            for axis in 0..<3 {
-                var size = SIMD3<Float>(repeating: thickness)
-                size[axis] = half[axis] * 2 + thickness
-                let a = (axis + 1) % 3, b = (axis + 2) % 3
-                for i in 0..<4 {
-                    let edge = edges[axis * 4 + i]
-                    var position = SIMD3<Float>.zero
-                    position[a] = i < 2 ? -half[a] : half[a]
-                    position[b] = i.isMultiple(of: 2) ? -half[b] : half[b]
-                    edge.scale = size
-                    edge.position = position
-                }
-            }
+            frame.scale = half * 2
         }
     }
 
@@ -356,14 +346,23 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    static func nearestHitboxes(_ boxes: [Detected], to camera: SIMD2<Float>) -> [Detected] {
+        let limit = 32
+        guard boxes.count > limit else { return boxes }
+        let ranked = boxes.indices.map { ($0, boxes[$0].obstacle.distance(to: camera)) }
+            .sorted { ($0.1, $0.0) < ($1.1, $1.0) }
+        return ranked.prefix(limit).map { boxes[$0.0] }
+    }
+
     private func setDetected(_ d: [Detected]) {
-        guard d != detected else { return }
         detected = d
         if detectedCount != d.count { detectedCount = d.count }
         let mesh = hitboxMesh, scene = arView.scene
-        Self.updateHitboxes(&geometryHitboxes, with: d.filter { $0.source != .object }.map(\.obstacle),
+        let p = arView.session.currentFrame?.camera.transform.columns.3 ?? .zero
+        let visible = Self.nearestHitboxes(d, to: SIMD2(p.x, p.z))
+        Self.updateHitboxes(&geometryHitboxes, with: visible.filter { $0.source != .object }.map(\.obstacle),
                             mesh: mesh, color: .systemOrange, scene: scene)
-        Self.updateHitboxes(&modelHitboxes, with: d.filter { $0.source == .object }.map(\.obstacle),
+        Self.updateHitboxes(&modelHitboxes, with: visible.filter { $0.source == .object }.map(\.obstacle),
                             mesh: mesh, color: .systemYellow, scene: scene)
     }
 
