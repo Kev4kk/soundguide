@@ -106,3 +106,45 @@ Later, if needed: saving and reloading the room map with `ARWorldMap` (also fixe
 - **Soundscape / OSM backend.** It's outdoor and GPS-based, so it doesn't apply at room scale.
 - **Height mapped to pitch** (a higher object pings at a higher note). Generic HRTF gets up and down only roughly. Add this if testing shows people can't tell a shelf target from a floor target.
 - Multi-room maps, sharing layouts between phones, Android or WebXR.
+
+## Automatic obstacle detection (branch `feature/auto-obstacles`)
+
+Goal: obstacles appear without the helper placing them, live in world coordinates, and stay in the map after the camera turns away. Sweeping the phone past an object for a second or two should be enough.
+
+### Options weighed (iPhone 17: no LiDAR, wide 1× camera only)
+| Approach | Finds | False positives | Cost / thread | Model | Device-only checks |
+|---|---|---|---|---|---|
+| **ARKit plane anchors** | Walls, closed doors, sofa/bed sides (vertical); tables, benches (horizontal 0.3–1.2 m up) | Low. Planes need several frames of agreement | Free: ARKit already runs it, anchors already persist in world space | None | Whether blank walls get found |
+| **Accumulated `rawFeaturePoints`** | Anything textured that stands above the floor: chairs, bags, bins, plant pots, table legs | Medium. Rug patterns and cables (filtered by a 10 cm minimum height), depth noise at range (filtered by a 3 m range), moving people (mostly filtered: ARKit doesn't keep them as stable tracked features) | Under 1 ms per frame on the main thread; already in world space | None | Density on plain objects; noise at 2–3 m |
+| **YOLO (Vision + Core ML)** + floor raycast | 80 COCO classes, textureless ones too; gives names ("chair") | Low per box, but 10–30 cm position error, size has to be guessed, and people must be excluded or they'd persist | Neural Engine, off the main thread | 5–6 MB; Ultralytics YOLO11 is **AGPL-3.0**; needs Python to export | Everything |
+| **Depth Anything V2 Small** | Anything, including blank surfaces | Relative depth only: it needs scaling against feature points to place anything in the world | 20–35 ms per frame on the Neural Engine | ~50 MB | Everything |
+
+### Decision: planes + feature-point map, no ML in this pass
+Both are already in world space, cost nearly nothing, need no model or license, and their pure logic can be unit-tested. Together they cover walls, tables and most furniture. YOLO stays as phase 2, only if device testing shows plain, untextured objects are being missed. Depth is shelved: it's 50 MB, and it needs metric scaling that a feature-point map already provides more cheaply.
+
+### Design
+- **Floor height**: the lowest horizontal plane classified `.floor`, or failing that the lowest non-ceiling horizontal plane. Nothing is detected until a floor exists.
+- **Planes → obstacles** (`Detection.planeObstacle`, pure). Each `ARPlaneAnchor`'s four world corners (`planeExtent`, including `rotationOnYAxis`) are projected onto the floor and turned into the tightest box along one of the plane's own edges. A vertical plane becomes a thin box at least 10 cm thick, unless its bottom is above head height (1.8 m). A horizontal plane counts only if it sits 0.3–1.2 m above the floor. Plane anchors are read from `frame.anchors` at each rebuild, so ARKit's own plane merging and growing carry through.
+- **Feature points → obstacles** (`PointMap`, pure). Every frame, raw feature points within 3 m of the camera are stored **by ARKit identifier**, keeping the latest (most refined) position and a sighting count. Each rebuild:
+  1. Keep points seen in ≥3 frames that stand 0.1–1.8 m above the floor.
+  2. Bin them into 10 cm floor cells. A cell is occupied when it holds ≥3 distinct points.
+  3. Group occupied cells into 8-connected clusters. Each cluster becomes the smallest-area oriented box, searched every 5°, so a diagonal wall stays thin instead of filling a room-sized box.
+  4. When a box is less than 40% filled (an L-shaped corner, for example), split it in half along its long side and repeat.
+  5. Drop clusters already inside a plane box, such as the points on a table top.
+  Turning away doesn't age points out, so the map remembers. A point is **forgotten only once it's been seen empty**. A feature seen *through* a stored point (the camera→feature ray passes within 5 cm of it and ends at least 0.3 m beyond) counts as a miss, and 5 misses with no fresh sighting of that point drops it. A person who stood still and then walks off clears once the wall behind them is visible again. Plain objects that ARKit can't see past are never wrongly carved. Points that never became stable are pruned after 2 s to keep memory flat.
+- **Rebuild** runs every 0.5 s on the main thread inside `session(_:didUpdate:)`. The cost is small, and frames aren't retained. The output is cell-quantised, so the list only changes when the map actually changes.
+- **Planner / TTC unchanged.** `ARController.obstacles` = manual + detected. `Navigator` also replans when the obstacle list changes, so an obstacle that appears mid-walk bends the route.
+- **UI.** Detected obstacles are **orange** (manual ones stay red). The setup screen gets an *Auto obstacles* toggle with a live count, and a **Remove** button that deletes the detected obstacle under the crosshair (within 0.5 m). A removed plane is ignored by its anchor ID. A removed point cluster becomes a no-detect disc, so the same features can't bring it back. *Clear* also resets the point map.
+- **Tuning**: every threshold above lives in `Tuning`.
+- **Separate app**: this branch builds as `com.kevinakk.soundguide.detect`, display name "SG Detect", so it installs next to the main-thread SoundGuide.
+- **Detection runs while guiding too**: the walker's phone adds obstacles it sees ahead, and the route bends around them.
+
+Decided with the user: planes and points only (no ML yet); auto-forget once seen empty; keep detecting during guiding; separate bundle ID.
+
+### Tests (Simulator, pure logic)
+- **Planes**: a diagonal wall becomes a thin rotated box; table height counts, floor and shelf heights don't; a high cabinet is ignored.
+- **Point map**: stable points form a box; points seen once don't; floor-level points and lone points don't; two separate objects give two boxes; a diagonal line of points gives a thin box; an L shape leaves its inside corner free; a refined point moves; a removed area stays removed; far points are ignored; seeing through a point forgets it, but not if it's re-sighted or the ray passes above it.
+- **Navigator**: replans when the obstacle list changes.
+
+### Device checks (need someone holding the phone)
+How quickly a chair, a bag and a plain box show up on a sweep. Whether walls are found. Rug or floor false positives. People walking through. Rebuild time with a large map.

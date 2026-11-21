@@ -16,7 +16,7 @@ targets:
     info:
       path: SoundGuide/Info.plist
       properties:
-        CFBundleDisplayName: SoundGuide
+        CFBundleDisplayName: SG Detect
         NSCameraUsageDescription: The camera tracks where you are in the room so sounds come from the right place.
         NSMotionUsageDescription: AirPods head movement keeps sounds fixed in the room when you turn your head.
         UILaunchScreen: {}
@@ -24,7 +24,7 @@ targets:
         UISupportedInterfaceOrientations: [UIInterfaceOrientationPortrait]
     settings:
       base:
-        PRODUCT_BUNDLE_IDENTIFIER: com.kevinakk.soundguide
+        PRODUCT_BUNDLE_IDENTIFIER: com.kevinakk.soundguide.detect
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
     scheme:
