@@ -4,6 +4,30 @@ import SwiftUI
 import UIKit
 import CoreML
 import Vision
+import os
+
+/// Construct and use exclusively on the serial Vision queue.
+final class YOLO26Detector {
+    private let request: VNCoreMLRequest
+
+    enum InferenceError: Error { case unexpectedResults }
+
+    init(configuration: MLModelConfiguration = MLModelConfiguration()) throws {
+        let model = try VNCoreMLModel(for: YOLO26n(configuration: configuration).model)
+        request = VNCoreMLRequest(model: model)
+        // The model's portrait input approximates the camera aspect ratio. Preserve the
+        // whole image so normalized Vision coordinates map directly back to the sensor.
+        request.imageCropAndScaleOption = .scaleFill
+    }
+
+    func detect(in image: CVPixelBuffer, orientation: CGImagePropertyOrientation) throws -> [VNRecognizedObjectObservation] {
+        try VNImageRequestHandler(cvPixelBuffer: image, orientation: orientation).perform([request])
+        guard let objects = request.results as? [VNRecognizedObjectObservation] else {
+            throw InferenceError.unexpectedResults
+        }
+        return objects
+    }
+}
 
 enum ObjectKind { case waypoint, obstacle }
 
@@ -18,6 +42,7 @@ struct Detected: Equatable {
     enum Source: Equatable { case plane(UUID), points, object }
     let obstacle: Obstacle
     let source: Source
+    var trackID: Int? = nil
 }
 
 final class ARController: NSObject, ObservableObject, ARSessionDelegate {
@@ -28,6 +53,16 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var guiding = false
     @Published private(set) var status = ""
     @Published private(set) var trackingNormal = false
+    @Published private(set) var cameraStatus = "Starting object detection…"
+    private var cameraCueTiming = CameraCueTiming()
+    @Published private(set) var proximityStatus = "Distance not established"
+    private var liveRange = LiveRange()
+    private var needsRangeIntro = true
+    private var lastRangeSample = -Double.infinity
+    private var lastRangeSpeech = -Double.infinity
+    private var lastRangeBand = Int.max
+    private var lastRangeHit = -Double.infinity
+    private var classifiedFloor: Float?
     @Published private(set) var usingHeadTracking = false
     @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
@@ -35,8 +70,21 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     // Beacon pings and spoken directions only play while this is on. Safety sounds always play.
     @Published private(set) var guideAudioOn = false
     private var lastMapUpdate: TimeInterval = 0
-    @Published var autoDetect = true { didSet { if !autoDetect { setDetected([]) } } }
-    @Published private(set) var detected: [Detected] = []
+    @Published var autoDetect = true {
+        didSet {
+            guard autoDetect != oldValue else { return }
+            detectorGeneration &+= 1
+            cameraCueTiming = CameraCueTiming()
+            resetRange()
+            cameraStatus = autoDetect ? "Starting object detection…" : "Object detection off"
+            if !autoDetect {
+                navigationObstacles = []
+                setDetected([])
+            }
+        }
+    }
+    @Published private(set) var detectedCount = 0
+    private var detected: [Detected] = []
 
     private let audio = SpatialAudio()
     private let head = HeadTracker()
@@ -56,15 +104,20 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var lastBuild: TimeInterval = 0
     private var floorY: Float?
     // Object detector: runs off the main thread, one image at a time.
+    private static let detectorLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SoundGuide", category: "YOLO26")
     private let visionQueue = DispatchQueue(label: "detector", qos: .userInitiated)
-    private var detector: VNCoreMLModel?
+    private var detector: YOLO26Detector?
+    private var detectorGeneration = 0
     private var detectorBusy = false
-    private var lastDetectorRun: TimeInterval = 0
+    private var lastDetectorRun = -TimeInterval.infinity
     private var tracks = ObjectTracks()
-    private var detectedEntities: [AnchorEntity] = []
+    private var navigationObstacles: [Obstacle] = []
+    private var geometryHitboxes: [Hitbox] = []
+    private var modelHitboxes: [Hitbox] = []
+    private lazy var hitboxMesh = MeshResource.generateBox(size: 1)
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + detected.map(\.obstacle) }
+    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + navigationObstacles }
 
     override init() {
         super.init()
@@ -74,15 +127,19 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         config.planeDetection = [.horizontal, .vertical]
         arView.session.run(config)
 
-        let coaching = ARCoachingOverlayView()
-        coaching.session = arView.session
-        coaching.goal = .anyPlane
-        coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        arView.addSubview(coaching)
+        // Show the live camera and setup UI while world tracking initializes.
         if tuning.useHeadTracking { head.start() }
-        visionQueue.async {   // loading takes a second or two
-            let model = try? VNCoreMLModel(for: YOLOv3Tiny(configuration: MLModelConfiguration()).model)
-            DispatchQueue.main.async { self.detector = model }
+        visionQueue.async { [weak self] in
+            do {
+                let detector = try YOLO26Detector()
+                DispatchQueue.main.async { self?.detector = detector }
+            } catch {
+                Self.detectorLog.error("Could not load YOLO26: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self?.cameraStatus = "Object detection unavailable"
+                    self?.audio.say("Object detection unavailable")
+                }
+            }
         }
     }
 
@@ -195,7 +252,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             pointMap.add(pc.points, ids: pc.identifiers, camera: SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z),
                          now: frame.timestamp, tuning: tuning)
         }
-        runDetector(frame)
         guard frame.timestamp - lastBuild >= tuning.detectInterval else { return }
         lastBuild = frame.timestamp
 
@@ -207,6 +263,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let floors = ground.filter { if case .floor = $0.classification { return true }; return false }
         guard let floorY = (floors.isEmpty ? ground : floors).map({ Self.corners($0)[0].y }).min() else { return }
         self.floorY = floorY
+        classifiedFloor = floors.map { Self.corners($0)[0].y }.min()
 
         let planeBoxes = planes.compactMap { a -> Detected? in
             guard !ignoredPlanes.contains(a.identifier) else { return nil }
@@ -217,46 +274,136 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let pointBoxes = pointMap.build(floorY: floorY, now: frame.timestamp, tuning: tuning)
             .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
             .map { Detected(obstacle: $0, source: .points) }
-        let objectBoxes = tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
-        setDetected(planeBoxes + pointBoxes + objectBoxes)
+        let boxes = planeBoxes + pointBoxes + trackedObjects
+        // Keep route planning on its original cadence; render YOLO results as they arrive.
+        navigationObstacles = boxes.map { $0.obstacle.navigationFootprint }
+        setDetected(boxes)
     }
 
-    /// YOLO boxes → floor footprints, using the pose the image was taken at. Labels are ignored, except people:
-    /// ponytail: people move, so they never enter the map; time-to-collision on live boxes if walkers need them.
+    private var trackedObjects: [Detected] {
+        tracks.confirmed(tuning: tuning).map { Detected(obstacle: $0.obstacle, source: .object, trackID: $0.id) }
+    }
+
+    /// Match same-class footprints using the image's own pose. People mask visibility but never enter the persistent map.
     private func runDetector(_ frame: ARFrame) {
-        guard let model = detector, let floorY, !detectorBusy,
-              frame.timestamp - lastDetectorRun >= tuning.objectInterval else { return }
+        guard let model = detector, !detectorBusy else { return }
+        let mappingFloor = trackingNormal ? floorY : nil
+        let thermal = ProcessInfo.processInfo.thermalState
+        if thermal == .serious || thermal == .critical {
+            guard frame.timestamp - lastDetectorRun >= tuning.hotObjectInterval else { return }
+        }
         detectorBusy = true
         lastDetectorRun = frame.timestamp
         let cam = frame.camera, image = frame.capturedImage, t = tuning
+        let generation = detectorGeneration, timestamp = frame.timestamp
+        let features = frame.rawFeaturePoints?.points ?? []
         let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
                               resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
+        let previousTracks = tracks
         visionQueue.async { [weak self] in
-            let request = VNCoreMLRequest(model: model)
-            request.imageCropAndScaleOption = .scaleFill   // whole field of view; boxes map back to the full image
-            try? VNImageRequestHandler(cvPixelBuffer: image, orientation: .right).perform([request])
-            let found = (request.results as? [VNRecognizedObjectObservation] ?? [])
-                .filter { $0.confidence >= t.objectConfidence && $0.labels.first?.identifier != "person" }
-                .compactMap { o in
-                    Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
-                                              minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
+            let found: [ObjectObservation]?
+            var masks: [CGRect] = []
+            let cameraMessage: String?
+            do {
+                let boxes = try model.detect(in: image, orientation: .right)
+                let confident = boxes.filter { ($0.labels.first?.confidence ?? 0) >= t.objectConfidence }
+                let objects = confident.compactMap { o in o.labels.first.map { CameraObject(label: $0.identifier, bounds: o.boundingBox) } }
+                cameraMessage = CameraObject.primary(objects)?.announcement
+                masks = confident.map(\.boundingBox)
+                found = confident.compactMap { o in
+                    guard let floorY = mappingFloor else { return nil }
+                    guard let label = o.labels.first, label.confidence >= t.objectConfidence,
+                          label.identifier != "person" else { return nil }
+                    guard let fit = Detection.fitObject(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
+                                                     minY: Float(o.boundingBox.minY), maxY: Float(o.boundingBox.maxY),
+                                                     shot, floorY: floorY, tuning: t, features: features) else { return nil }
+                    return ObjectObservation(obstacle: fit.obstacle, label: label.identifier, imageBox: o.boundingBox, measured: fit.measured)
                 }
+            } catch {
+                Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")
+                cameraMessage = nil
+                found = nil   // A failed request is not evidence that the room is empty.
+            }
+            let updated = mappingFloor == nil ? nil : found.map { observations in
+                var next = previousTracks
+                next.update(observations, shot: shot, now: timestamp, tuning: t, features: features, masks: masks)
+                return next
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.detectorBusy = false
-                if self.autoDetect { self.tracks.update(found, shot: shot, tuning: t) }
+                guard self.autoDetect, self.detectorGeneration == generation else { return }
+                let liveStatus = found == nil ? "Object detection unavailable" : cameraMessage ?? "Scanning for objects"
+                if self.cameraStatus != liveStatus { self.cameraStatus = liveStatus }
+                // Never interrupt waypoint directions, tracking-loss alerts, or collision audio.
+                if !self.guiding, timestamp - self.lastRangeHit > 1.5, let cue = cameraMessage ?? (found == nil ? liveStatus : nil),
+                   self.cameraCueTiming.shouldSpeak(cue, now: timestamp) { self.audio.say(cue) }
+                guard let updated, self.trackingNormal else { return }
+                self.tracks = updated
+                self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
             }
         }
     }
 
-    private func setDetected(_ d: [Detected]) {
-        guard d != detected else { return }
-        detected = d
-        detectedEntities.forEach { arView.scene.removeAnchor($0) }
-        detectedEntities = d.map {   // orange = planes and points, yellow = object detector
-            Self.box($0.obstacle, color: ($0.source == .object ? UIColor.systemYellow : .systemOrange).withAlphaComponent(0.5))
+    /// One shared cube mesh drawn in wireframe, not twelve render entities per box.
+    private final class Hitbox {
+        let anchor = AnchorEntity(world: .zero)
+        private let frame: ModelEntity
+        private var obstacle: Obstacle?
+
+        init(mesh: MeshResource, color: UIColor) {
+            var material = UnlitMaterial(color: color)
+            if #available(iOS 18.0, *) {
+                material.triangleFillMode = .lines
+            } else {
+                material.blending = .transparent(opacity: 0.12)
+            }
+            frame = ModelEntity(mesh: mesh, materials: [material])
+            anchor.addChild(frame)
         }
-        detectedEntities.forEach { arView.scene.addAnchor($0) }
+
+        func update(_ o: Obstacle) {
+            guard obstacle != o else { return }
+            obstacle = o
+            let y = o.displayY ?? o.center.y...(o.center.y + 0.1)
+            let half = SIMD3(o.halfSize.x, (y.upperBound - y.lowerBound) / 2, o.halfSize.y)
+            frame.position = SIMD3(o.center.x, y.lowerBound + half.y, o.center.z)
+            frame.orientation = simd_quatf(angle: o.yaw, axis: [0, 1, 0])
+            frame.scale = half * 2
+        }
+    }
+
+    private static func updateHitboxes(_ hitboxes: inout [Hitbox], with obstacles: [Obstacle],
+                                      mesh: MeshResource, color: UIColor, scene: RealityKit.Scene) {
+        while hitboxes.count > obstacles.count { scene.removeAnchor(hitboxes.removeLast().anchor) }
+        for (i, obstacle) in obstacles.enumerated() {
+            if i == hitboxes.count {
+                let box = Hitbox(mesh: mesh, color: color)
+                hitboxes.append(box)
+                scene.addAnchor(box.anchor)
+            }
+            hitboxes[i].update(obstacle)
+        }
+    }
+
+    static func nearestHitboxes(_ boxes: [Detected], to camera: SIMD2<Float>) -> [Detected] {
+        let limit = 32
+        guard boxes.count > limit else { return boxes }
+        let ranked = boxes.indices.map { ($0, boxes[$0].obstacle.distance(to: camera)) }
+            .sorted { ($0.1, $0.0) < ($1.1, $1.0) }
+        return ranked.prefix(limit).map { boxes[$0.0] }
+    }
+
+    private func setDetected(_ d: [Detected]) {
+        detected = d
+        if detectedCount != d.count { detectedCount = d.count }
+        let mesh = hitboxMesh, scene = arView.scene
+        let p = arView.session.currentFrame?.camera.transform.columns.3 ?? .zero
+        let visible = Self.nearestHitboxes(d, to: SIMD2(p.x, p.z))
+        Self.updateHitboxes(&geometryHitboxes, with: visible.filter { $0.source != .object }.map(\.obstacle),
+                            mesh: mesh, color: .systemOrange, scene: scene)
+        Self.updateHitboxes(&modelHitboxes, with: visible.filter { $0.source == .object }.map(\.obstacle),
+                            mesh: mesh, color: .systemYellow, scene: scene)
     }
 
     /// Deletes the detected obstacle under the crosshair, and keeps it from coming back.
@@ -271,9 +418,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         switch d.source {
         case .plane(let id): ignoredPlanes.insert(id)
         case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
-        case .object: tracks.ignore(around: xz(d.obstacle.center), radius: r)
+        case .object:
+            detectorGeneration &+= 1 // don't resurrect the removed track from an in-flight snapshot
+            tracks.ignore(around: xz(d.obstacle.center), radius: r)
         }
-        setDetected(detected.filter { $0 != d })
+        let remaining = detected.filter { $0 != d }
+        navigationObstacles = remaining.map { $0.obstacle.navigationFootprint }
+        setDetected(remaining)
         status = "Removed detected obstacle"
         tap.impactOccurred()
     }
@@ -319,15 +470,86 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         status = announce ?? "Stopped"
     }
 
+    private func resetRange() {
+        liveRange = LiveRange()
+        needsRangeIntro = true
+        lastRangeBand = .max; lastRangeHit = -.infinity; lastRangeSpeech = -.infinity
+        proximityStatus = "Distance not established"
+    }
+
+    /// Independent of model inference, mapped hitboxes, waypoints and the Play button.
+    private func checkClearance(_ frame: ARFrame) {
+        let now = frame.timestamp
+        guard now - lastRangeSample >= 0.1 else { return }
+        lastRangeSample = now
+        let cam = frame.camera, m = cam.transform
+        let shot = CameraShot(transform: m, intrinsics: cam.intrinsics,
+                              resolution: [Float(cam.imageResolution.width), Float(cam.imageResolution.height)])
+        let flat = SIMD3(-m.columns.2.x, 0, -m.columns.2.z)
+        var wall: Float?
+        if simd_length(flat) > 0.5 {
+            // Only hit the observed polygon. An estimated/infinite wall could span a doorway.
+            let forward = simd_normalize(flat), right = simd_cross(forward, SIMD3(0, 1, 0))
+            for offset: Float in [-0.30, 0, 0.30] {
+                let origin = shot.position + right * offset
+                let query = ARRaycastQuery(origin: origin, direction: forward, allowing: .existingPlaneGeometry, alignment: .vertical)
+                if let hit = arView.session.raycast(query).first {
+                    let p = hit.worldTransform.columns.3
+                    let d = simd_dot(SIMD3(p.x, p.y, p.z) - origin, forward)
+                    if d > 0 { wall = min(wall ?? .infinity, d) }
+                }
+            }
+        }
+        let cloud = frame.rawFeaturePoints
+        guard let d = liveRange.clearance(points: cloud?.points ?? [], ids: cloud?.identifiers ?? [], shot: shot,
+                                           floor: classifiedFloor, plane: wall, now: now) else {
+            if now - lastRangeHit > 0.4 {
+                if proximityStatus != "Distance not established" { proximityStatus = "Distance not established" }
+                if lastRangeBand != .max, now - lastRangeHit > 1.5 {
+                    lastRangeBand = .max
+                    if !guiding { audio.say("Distance no longer available") }
+                }
+            }
+            return
+        }
+        lastRangeHit = now
+        let band = d <= 0.65 ? 0 : d <= 1.2 ? 1 : 2
+        let distance = max(0.25, (d * 4).rounded() / 4)
+        let message = String(format: "Obstacle ahead, about %g %@", Double(distance), distance == 1 ? "meter" : "meters")
+        if proximityStatus != message { proximityStatus = message }
+        vibrate(band == 0 ? .stop : .slowDown(interval: band == 1 ? 0.45 : 0.85), now: now)
+        if (band < lastRangeBand && now - lastRangeSpeech >= 0.4) || now - lastRangeSpeech >= (band == 0 ? 2 : 3) {
+            audio.say(message)
+            lastRangeSpeech = now; lastRangeBand = band
+        }
+    }
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let normal: Bool
         if case .normal = frame.camera.trackingState { normal = true } else { normal = false }
-        if normal != trackingNormal { trackingNormal = normal }
+        if normal != trackingNormal {
+            if !normal {
+                detectorGeneration &+= 1
+                resetRange()
+                if autoDetect && !guiding {
+                    audio.say("Tracking lost. Distance unavailable")
+                    needsRangeIntro = false
+                }
+            }
+            trackingNormal = normal
+        }
         let ready = head.isLive, denied = head.accessDenied
         if ready != headphonesReady { headphonesReady = ready }
         if denied != motionAccessDenied { motionAccessDenied = denied }
         if drag != nil { updateDragPreview() }
-        if autoDetect && normal { detect(frame) }
+        if autoDetect {
+            if needsRangeIntro {
+                needsRangeIntro = false
+                if !guiding { audio.say("Distance not established. Point the phone forward.") }
+            }
+            if normal { checkClearance(frame); detect(frame) } // Metric mapping still requires a trustworthy pose.
+            runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
+        }
         guard guiding else { return }
 
         // Never guide from a stale pose.
@@ -366,7 +588,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if guideAudioOn, let callout = out.callout {
+        if guideAudioOn, frame.timestamp - lastRangeHit > 1.5, let callout = out.callout {
             audio.say(callout, interrupt: false)
             status = callout
         }

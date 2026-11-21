@@ -62,12 +62,14 @@ struct Tuning {
     var detectInterval: Double = 0.5       // seconds between obstacle map rebuilds
     var removeRadius: Float = 0.5          // Remove picks a detected obstacle this close to the crosshair
 
-    // Object detector (YOLOv3-Tiny via Vision): a box on the floor where each detected object stands.
-    var objectInterval: Double = 0.2       // seconds between detector runs
+    // Object detector (YOLO26n via Vision): a box on the floor where each detected object stands.
+    var objectEvidenceInterval: Double = 0.2   // preserve confirmation and forgetting at higher frame rates
+    var hotObjectInterval: Double = 0.2        // inference backoff when iOS reports thermal pressure
     var objectConfidence: Float = 0.5
     var objectRange: Float = 4             // further boxes land too far off on the floor
     var minBoxBottom: Float = 0.03         // a box touching the image bottom hides where it meets the floor
     var minObjectSize: Float = 0.2, maxObjectSize: Float = 2
+    var maxObjectDisplayHeight: Float = 3  // cap estimates from clipped or noisy image boxes
     var objectMergeDistance: Float = 0.6   // a box this close to a known object is the same object
     var minObjectSightings = 3
     var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
@@ -103,6 +105,11 @@ struct Obstacle: Equatable {
     var center: SIMD3<Float>
     var halfSize: SIMD2<Float>   // along its own right / forward axes
     var yaw: Float = 0
+    var displayY: ClosedRange<Float>? = nil  // World-space extent for the AR overlay only.
+
+    var navigationFootprint: Obstacle {
+        Obstacle(center: center, halfSize: halfSize, yaw: yaw)
+    }
 
     private var right: SIMD2<Float> { SIMD2(cos(yaw), -sin(yaw)) }
     private var fwd: SIMD2<Float> { SIMD2(-sin(yaw), -cos(yaw)) }

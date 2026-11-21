@@ -14,10 +14,12 @@ struct ContentView: View {
 
     private var setupOverlay: some View {
         VStack {
-            Text(ar.status.isEmpty ? "Aim the + at the floor or a surface" : ar.status)
+            Text(ar.cameraStatus)
                 .font(.headline).padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding(.top)
+            if ar.autoDetect { Text(ar.proximityStatus).font(.subheadline).padding(4).background(.thinMaterial) }
+            if !ar.status.isEmpty { Text(ar.status).font(.subheadline).padding(4).background(.thinMaterial) }
             headphoneStatus
             Spacer()
             Image(systemName: "plus").font(.system(size: 36, weight: .light))
@@ -69,12 +71,12 @@ struct ContentView: View {
     private var detectionBar: some View {
         HStack {
             Toggle(isOn: $ar.autoDetect) {
-                Text("Auto obstacles (\(ar.detected.count))").font(.subheadline.weight(.semibold))
+                Text("Auto obstacles (\(ar.detectedCount))").font(.subheadline.weight(.semibold))
             }
             .tint(.orange).fixedSize()
             Button("Remove", action: ar.removeDetected)
                 .buttonStyle(.borderedProminent).tint(.orange)
-                .disabled(!ar.autoDetect || ar.detected.isEmpty || !ar.trackingNormal)
+                .disabled(!ar.autoDetect || ar.detectedCount == 0 || !ar.trackingNormal)
                 .accessibilityHint("Deletes the detected obstacle under the crosshair")
         }
         .padding(.horizontal, 12).padding(.vertical, 6)

@@ -1,6 +1,16 @@
 import XCTest
+import CoreML
+import CoreVideo
 import simd
 @testable import SoundGuide
+
+private extension ObjectTracks {
+    mutating func update(_ boxes: [Obstacle], shot: CameraShot, now: Double, tuning t: Tuning,
+                         rays: [SIMD3<Float>] = [], masks: [CGRect] = []) {
+        update(boxes.map { ObjectObservation(obstacle: $0, label: "chair", imageBox: .null) },
+               shot: shot, now: now, tuning: t, features: rays, masks: masks)
+    }
+}
 
 final class DetectionTests: XCTestCase {
     let t = Tuning()
@@ -44,6 +54,7 @@ final class DetectionTests: XCTestCase {
         let table = Detection.planeObstacle(corners: rect(y: 0.75), vertical: false, floorY: 0, tuning: t)!
         XCTAssertEqual(4 * table.halfSize.x * table.halfSize.y, 0.6, accuracy: 1e-3)   // tight, not an axis-aligned bound
         XCTAssertEqual(table.center.y, 0.75, accuracy: 1e-5)
+        XCTAssertEqual(table.displayY, 0...0.75)
         XCTAssertNil(Detection.planeObstacle(corners: rect(y: 0.02), vertical: false, floorY: 0, tuning: t))  // floor
         XCTAssertNil(Detection.planeObstacle(corners: rect(y: 1.5), vertical: false, floorY: 0, tuning: t))   // shelf
         XCTAssertNotNil(Detection.planeObstacle(corners: rect(y: 1.25), vertical: false, floorY: 0.5, tuning: t))
@@ -58,6 +69,8 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(obs.count, 1)
         XCTAssertEqual(obs[0].distance(to: [1, -2]), 0)
         XCTAssertEqual(obs[0].distance(to: [1, -2.5]), 0.3, accuracy: 0.1)
+        XCTAssertEqual(obs[0].displayY?.lowerBound, 0)
+        XCTAssertGreaterThan(obs[0].displayY?.upperBound ?? 0, 0.1)
     }
 
     func testOneSightingFloorClutterAndLonePointsDontCount() {
@@ -194,6 +207,21 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(nav.replans, 2)
     }
 
+    // MARK: Model integration
+
+    func testYOLO26SupportsEmptyVisionResults() throws {
+        let config = MLModelConfiguration()
+        config.computeUnits = .cpuOnly
+        let detector = try YOLO26Detector(configuration: config)
+        var buffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 640, 480, kCVPixelFormatType_32BGRA, nil, &buffer), kCVReturnSuccess)
+        let image = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(image, [])
+        memset(CVPixelBufferGetBaseAddress(image), 0, CVPixelBufferGetDataSize(image))
+        CVPixelBufferUnlockBaseAddress(image, [])
+        XCTAssertTrue(try detector.detect(in: image, orientation: .right).isEmpty)
+    }
+
     // MARK: Object detector geometry
 
     /// Portrait phone at 1.4 m facing -z, pitched down by `pitch` radians; sensor 1920×1440.
@@ -230,13 +258,81 @@ final class DetectionTests: XCTestCase {
 
     func testObjectFootprintStandsOnBoxBottom() {
         let s = shot()
-        let o = Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, s, floorY: 0, tuning: t)!
+        let o = Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: 0.85, s, floorY: 0, tuning: t)!
         XCTAssertEqual(o.center.x, 0, accuracy: 1e-4)
         XCTAssertEqual(o.distance(to: [0, -1.4]), 0, accuracy: 1e-3)    // bottom-centre is its near edge
         XCTAssertLessThan(o.center.z, -1.4)                              // and it extends away from the camera
         XCTAssertGreaterThan(o.halfSize.x, t.minObjectSize / 2 - 1e-5)
-        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.01, s, floorY: 0, tuning: t))  // bottom cut off
-        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.98, shot(pitch: -0.15), floorY: 0, tuning: t))  // near the horizon: too far or never meets the floor
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.01, maxY: 0.5, s, floorY: 0, tuning: t))  // bottom cut off
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.98, maxY: 1, shot(pitch: -0.15), floorY: 0, tuning: t))  // near the horizon: too far or never meets the floor
+    }
+
+    func testHitboxHeightUsesTopRayWithoutChangingFootprint() throws {
+        let s = shot()
+        let top = try XCTUnwrap(Detection.project([0, 0.8, -1.4], s))
+        let maxY = Detection.portraitPoint(sensor: top, s).y
+        let tall = try XCTUnwrap(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: maxY, s, floorY: 0, tuning: t))
+        let short = try XCTUnwrap(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: 0.6, s, floorY: 0, tuning: t))
+        let y = try XCTUnwrap(tall.displayY)
+        XCTAssertEqual(y.lowerBound, 0)
+        XCTAssertEqual(y.upperBound, 0.8, accuracy: 1e-4)
+        XCTAssertLessThan(try XCTUnwrap(short.displayY).upperBound, y.upperBound)
+        XCTAssertEqual(tall.navigationFootprint, short.navigationFootprint)
+    }
+
+    func testElevatedObjectUsesVisibleSurfaceInsteadOfFloor() throws {
+        let s = shot(pitch: 0)
+        func image(_ p: SIMD3<Float>) throws -> SIMD2<Float> {
+            Detection.portraitPoint(sensor: try XCTUnwrap(Detection.project(p, s)), s)
+        }
+        let lo = try image([-0.3, 0.95, -2]), hi = try image([0.3, 1.65, -2])
+        let features: [SIMD3<Float>] = [[-0.1, 1.2, -2], [0.1, 1.3, -2], [0, 1.5, -2], [0, 1.4, -2], [0, 1.4, -3.5]]
+        let o = try XCTUnwrap(Detection.objectFootprint(minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, s, floorY: 0, tuning: t, features: features))
+        XCTAssertEqual(o.halfSize.x * 2, 0.6, accuracy: 0.01)
+        XCTAssertLessThan(o.halfSize.y, o.halfSize.x)
+        XCTAssertEqual(try XCTUnwrap(o.displayY).lowerBound, 0.95, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(o.displayY).upperBound, 1.65, accuracy: 0.01)
+    }
+
+    func testCrowdedSceneBoundsOnlyTheOverlay() {
+        let all = (0..<2_000).map { i in
+            Detected(obstacle: Obstacle(center: [Float(i), 0, 0], halfSize: [0.1, 0.1]), source: .points)
+        }
+        let visible = ARController.nearestHitboxes(all, to: [1999, 0])
+        XCTAssertEqual(visible.count, 32)
+        XCTAssertEqual(visible.first, all.last)
+        XCTAssertEqual(visible.last, all[1968])
+    }
+
+    func testLiveClearanceWithoutFloorIgnoresIsolatedAndSidePoints() throws {
+        let s = shot(pitch: 0), points: [SIMD3<Float>] = [[0, 1.4, -0.3], [-0.1, 1.4, -1], [0, 1.3, -1.02], [0.1, 1.5, -1.05], [0.6, 1.4, -0.4]]
+        let ids = points.indices.map(UInt64.init)
+        var range = LiveRange()
+        XCTAssertNil(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 0))
+        XCTAssertEqual(try XCTUnwrap(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 0.1)), 1.02, accuracy: 0.001)
+        XCTAssertEqual(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: 0.7, now: 0.2), 0.7)
+        XCTAssertNil(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 1))
+        XCTAssertNil(range.clearance(points: [], ids: [], shot: s, floor: nil, plane: nil, now: 1.1))
+    }
+
+    func testLiveClearanceRejectsFloorAndBehindCameraEvidence() {
+        let points: [SIMD3<Float>] = [[0, 0.05, -1], [-0.1, 0.02, -1], [0.1, 0.04, -1], [0, 1.2, 1], [-0.1, 1.2, 1], [0.1, 1.2, 1]]
+        var range = LiveRange()
+        for now in [0.0, 0.1, 0.2] {
+            XCTAssertNil(range.clearance(points: points, ids: points.indices.map(UInt64.init), shot: shot(), floor: 0, plane: nil, now: now))
+        }
+    }
+
+    func testCameraCuesNeedNoFloorAndIncludePeople() {
+        let person = CameraObject(label: "person", bounds: CGRect(x: 0.05, y: 0.1, width: 0.4, height: 0.7))
+        let chair = CameraObject(label: "chair", bounds: CGRect(x: 0.7, y: 0.2, width: 0.1, height: 0.1))
+        XCTAssertEqual(CameraObject.primary([person, chair])?.announcement, "Person, left")
+        XCTAssertEqual(CameraObject.primary([chair])?.announcement, "Chair, right")
+        XCTAssertNil(CameraObject.primary([])) // No all-clear conclusion from a blank image.
+        var timing = CameraCueTiming()
+        XCTAssertTrue(timing.shouldSpeak("Person, left", now: 0))
+        XCTAssertFalse(timing.shouldSpeak("Person, left", now: 1))
+        XCTAssertTrue(timing.shouldSpeak("Chair, right", now: 2))
     }
 
     // MARK: Object tracks
@@ -245,10 +341,10 @@ final class DetectionTests: XCTestCase {
         var tr = ObjectTracks()
         let s = shot(), box = Obstacle(center: [0, 0, -1.6], halfSize: [0.2, 0.2])
         var moved = box; moved.center.x += 0.1
-        tr.update([box], shot: s, tuning: t)
-        tr.update([moved], shot: s, tuning: t)
+        tr.update([box], shot: s, now: 0, tuning: t)
+        tr.update([moved], shot: s, now: 0.2, tuning: t)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
-        tr.update([box, Obstacle(center: [2, 0, -1.6], halfSize: [0.2, 0.2])], shot: s, tuning: t)
+        tr.update([box, Obstacle(center: [2, 0, -1.6], halfSize: [0.2, 0.2])], shot: s, now: 0.4, tuning: t)
         let obs = tr.obstacles(tuning: t)
         XCTAssertEqual(obs.count, 1)
         XCTAssertEqual(obs[0].center.x, 0.1 / 3, accuracy: 1e-4)
@@ -257,21 +353,66 @@ final class DetectionTests: XCTestCase {
     func testTrackForgottenOnlyWhenItsSpotIsInViewAndEmpty() {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
-        for _ in 0..<t.objectForgetMisses { tr.update([], shot: shot(yaw: .pi), tuning: t) }   // looking away
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
+        let rays: [SIMD3<Float>] = [-0.1, 0, 0.1].map { x in shot().position + (SIMD3<Float>(x, 0.25, -1.4) - shot().position) * 2 }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t, rays: rays)
+        }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(), now: 3 + Double(i) * 0.2, tuning: t, rays: rays, masks: [CGRect(x: 0, y: 0, width: 1, height: 1)])
+        }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(), now: 5 + Double(i) * 0.2, tuning: t)
+        }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        for _ in 0..<(t.objectForgetMisses - 1) { tr.update([], shot: shot(), tuning: t) }
+        // At 50 Hz only the first miss in each 200 ms interval counts.
+        for i in 0..<(10 * (t.objectForgetMisses - 1)) { tr.update([], shot: shot(), now: 7 + Double(i) * 0.02, tuning: t, rays: rays) }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        tr.update([], shot: shot(), tuning: t)
+        tr.update([], shot: shot(), now: 7 + Double(t.objectForgetMisses - 1) * 0.2, tuning: t, rays: rays)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
+
+    func testFastFramesDoNotConfirmTracksPrematurely() {
+        var tr = ObjectTracks()
+        let s = shot(), box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        for i in 0..<20 { tr.update([box], shot: s, now: Double(i) * 0.02, tuning: t) }
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+        tr.update([box], shot: s, now: 0.4, tuning: t)
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+    }
+
+    func testDuplicateBoxesDoNotCountAsMultipleSightings() {
+        var tr = ObjectTracks()
+        let s = shot(), box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        tr.update([box, box], shot: s, now: 0, tuning: t)
+        tr.update([box, box], shot: s, now: 0.4, tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+        tr.update([box], shot: s, now: 0.42, tuning: t)
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+    }
+
+    func testMovingChairKeepsIdentityBesideStationaryChair() throws {
+        var tr = ObjectTracks()
+        let s = shot()
+        func chair(_ x: Float) -> Obstacle { Obstacle(center: [x, 0, -2], halfSize: [0.15, 0.15]) }
+        for i in 0..<3 { tr.update([chair(0), chair(0.45)], shot: s, now: Double(i) * 0.2, tuning: t) }
+        let ids = tr.confirmed(tuning: t).map(\.id)
+        XCTAssertEqual(ids.count, 2)
+        for i in 1...5 {
+            tr.update([chair(0.45), chair(-0.2 * Float(i))], shot: s, now: 0.4 + Double(i) * 0.2, tuning: t)
+        }
+        let result = tr.confirmed(tuning: t)
+        XCTAssertEqual(result.map(\.id), ids)
+        XCTAssertEqual(try XCTUnwrap(result.first).obstacle.center.x, -1, accuracy: 0.05)
+        XCTAssertEqual(try XCTUnwrap(result.last).obstacle.center.x, 0.45, accuracy: 0.01)
     }
 
     func testRemovedTrackStaysRemoved() {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
         tr.ignore(around: [0, -1.4], radius: 0.5)
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        for i in 3..<6 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
     }
 }
