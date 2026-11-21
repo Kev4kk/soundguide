@@ -79,13 +79,13 @@ Info.plist                  // NSCameraUsageDescription
 ## Next steps (planned, not built)
 These come after testing the route following and the time-to-collision warnings.
 
-1. **Walls and tables from ARKit planes.** No LiDAR needed. ARKit already finds flat surfaces. Add vertical planes (walls) to the planner grid as blocked cells, and horizontal planes about 0.3–1.2 m above the floor (tables, benches) as blocked areas. The helper then only places what ARKit misses, such as chair legs, bags and doorframes, and A* routes around walls with no extra code. A slow sweep of the room during setup lets ARKit map surfaces outside the current camera view, since detected planes persist.
+1. **Walls and tables from ARKit planes.** *(Built on `feature/auto-obstacles`; see "Automatic obstacle detection".)* No LiDAR needed. ARKit already finds flat surfaces. Add vertical planes (walls) to the planner grid as blocked cells, and horizontal planes about 0.3–1.2 m above the floor (tables, benches) as blocked areas. The helper then only places what ARKit misses, such as chair legs, bags and doorframes, and A* routes around walls with no extra code. A slow sweep of the room during setup lets ARKit map surfaces outside the current camera view, since detected planes persist.
 2. **More speech.** Speaking when you stop is built. Still to do:
    - Tap the screen to hear the same message on demand.
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
 
-3. **Detecting unplaced obstacles automatically (on-device models).** No LiDAR needed.
+3. **Detecting unplaced obstacles automatically (on-device models).** *(Phase 2 of "Automatic obstacle detection": only if planes + feature points miss plain objects on the device.)* No LiDAR needed.
    - **Pipeline.** Send about 10 of ARKit's 60 frames per second (`ARFrame.capturedImage`) through Vision to a YOLO11n Core ML model (`yolo export format=coreml`). For each box, raycast from its bottom-centre pixel onto the detected floor (`.estimatedPlane`, horizontal) to get the object's floor position. Merge a detection with a known obstacle if it's within about 0.5 m, add it as an obstacle only after 3 or more sightings, and drop it if it goes unseen while in view. Auto obstacles feed the same list the A* planner and collision warnings use.
    - **Limits.** It only finds the ~80 COCO object types (people, chairs, tables, couches, bikes, plants, bags). Walls come from step 1. Stairs, poles and doors would need a custom-trained model. It sees only the 1× camera's view (ARKit offers no ultra-wide format on the iPhone 17, checked on the device), and positions are off by roughly 10–30 cm.
    - **Fallback that catches anything: a depth model.** Depth Anything V2 Small (Core ML) estimates distance for every pixel at about 5 per second. Something big and close straight ahead triggers the stop warning, even when YOLO has no name for it.
@@ -100,7 +100,7 @@ Later, if needed: saving and reloading the room map with `ARWorldMap` (also fixe
 - **Front/back confusion.** Generic HRTF without head tracking often puts sounds behind the listener when they're in front. The on-axis tone fixes most of it, and turning the body to scan helps with the rest.
 - **Drift and relocalization.** Room scale is fine, but tracking slips in rooms with blank walls or poor lighting. Without LiDAR this matters more. Put down a rug or a few objects with texture, keep the room well lit, and set up the waypoints in the same lighting the walker will have.
 - **Phone pointing ≠ body facing.** If the walker lets the phone drift sideways, the directions rotate with it. A chest strap is the fix.
-- **Only placed obstacles exist** (until next step 3 is built). Anything nobody placed is invisible to the app. This is a hackathon demo, not a mobility aid, so a cane or a spotter is still required.
+- **Only placed or detected obstacles exist.** Plain, untextured objects and anything outside the 1× camera's view are still invisible to the app. This is a hackathon demo, not a mobility aid, so a cane or a spotter is still required.
 
 ## Skipped (YAGNI)
 - **Soundscape / OSM backend.** It's outdoor and GPS-based, so it doesn't apply at room scale.
