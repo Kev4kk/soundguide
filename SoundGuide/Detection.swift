@@ -1,4 +1,5 @@
 import simd
+import CoreGraphics
 
 /// Turns ARKit's world-space planes and feature points into floor-plane `Obstacle`s.
 /// No ARKit types here, so all of it runs in unit tests.
@@ -199,6 +200,11 @@ extension Detection {
     /// A detector box (portrait, normalized) as a floor footprint: its bottom edge is where the object stands.
     /// ponytail: one camera can't see depth, so the footprint is as deep as it is wide; the point map measures what it can.
     static func objectFootprint(minX: Float, maxX: Float, minY: Float, maxY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning, features: [SIMD3<Float>] = []) -> Obstacle? {
+        fitObject(minX: minX, maxX: maxX, minY: minY, maxY: maxY, s, floorY: floorY, tuning: t, features: features)?.obstacle
+    }
+
+    static func fitObject(minX: Float, maxX: Float, minY: Float, maxY: Float, _ s: CameraShot, floorY: Float,
+                          tuning t: Tuning, features: [SIMD3<Float>]) -> (obstacle: Obstacle, measured: Bool)? {
         let midX = (minX + maxX) / 2
         // Prefer metric features on the object over assuming that its image bottom touches the floor.
         let centerRay = worldRay(pixel: sensorPixel(portrait: [midX, (minY + maxY) / 2], s), s)
@@ -233,9 +239,9 @@ extension Detection {
                 let depth = min(t.maxObjectSize, max(far - near, 0.08, width * 0.25))
                 let center = xz((left + right) / 2) + forward * depth / 2
                 let base = max(floorY, bottom.y)
-                return Obstacle(center: SIMD3(center.x, floorY, center.y), halfSize: [width / 2, depth / 2],
-                                yaw: Guidance.yaw(of: SIMD3(forward.x, 0, forward.y)),
-                                displayY: base...max(base + 0.08, min(top.y, base + t.maxObjectDisplayHeight)))
+                return (Obstacle(center: SIMD3(center.x, floorY, center.y), halfSize: [width / 2, depth / 2],
+                                 yaw: Guidance.yaw(of: SIMD3(forward.x, 0, forward.y)),
+                                 displayY: base...max(base + 0.08, min(top.y, base + t.maxObjectDisplayHeight))), true)
             }
         }
         guard minY > t.minBoxBottom,   // bottom cut off: where it meets the floor isn't in the picture
@@ -253,49 +259,136 @@ extension Detection {
         let along = simd_dot(xz(ray), f)
         let estimatedHeight = along > 1e-4 ? s.position.y + ray.y * (dist / along) - floorY : w
         let height = min(max(estimatedHeight.isFinite ? estimatedHeight : w, t.minObjectSize), t.maxObjectDisplayHeight)
-        return Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2),
-                        yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)), displayY: floorY...(floorY + height))
+        return (Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2),
+                         yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)), displayY: floorY...(floorY + height)), false)
     }
 }
 
-/// Detector boxes merged across frames into world-space objects. Confirmed after a few sightings;
-/// forgotten after several runs in which its spot was in view and nothing was detected there.
+struct ObjectObservation {
+    let obstacle: Obstacle
+    let label: String
+    let imageBox: CGRect // normalized portrait, Vision origin
+    var measured = false
+}
+
+/// Track identity and motion in world coordinates, not screen coordinates.
 struct ObjectTracks {
     private struct Track {
+        let id: Int
+        let label: String
         var o: Obstacle
+        var previousMeasurement: SIMD3<Float>
+        var velocity = SIMD3<Float>.zero
         var firstSeen: Double
         var lastSeen: Double
+        var lastMeasured = -Double.infinity
         var lastMiss = -Double.infinity
         var seen = 1, misses = 0
     }
     private var tracks: [Track] = []
+    private var nextID = 0
     private var ignored: [(center: SIMD2<Float>, radius: Float)] = []
 
     private func isIgnored(_ p: SIMD2<Float>) -> Bool { ignored.contains { simd_distance($0.center, p) < $0.radius } }
 
     func obstacles(tuning t: Tuning) -> [Obstacle] {
+        confirmed(tuning: t).map(\.obstacle)
+    }
+
+    func confirmed(tuning t: Tuning) -> [(id: Int, obstacle: Obstacle)] {
         let minimumSpan = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
-        return tracks.filter { $0.seen >= t.minObjectSightings && $0.lastSeen - $0.firstSeen + 1e-6 >= minimumSpan }.map(\.o)
+        return tracks.compactMap { $0.seen >= t.minObjectSightings && $0.lastSeen - $0.firstSeen + 1e-6 >= minimumSpan ? ($0.id, $0.o) : nil }
+    }
+
+    private func imageBounds(_ o: Obstacle, _ shot: CameraShot) -> CGRect {
+        let y = o.displayY ?? o.center.y...(o.center.y + 2 * o.halfSize.x)
+        let points = o.corners.flatMap { corner in [y.lowerBound, y.upperBound].compactMap { height -> SIMD2<Float>? in
+            guard let p = Detection.project([corner.x, height, corner.y], shot) else { return nil }
+            return Detection.portraitPoint(sensor: p, shot)
+        } }
+        guard points.count == 8 else { return .null }
+        let xs = points.map(\.x), ys = points.map(\.y)
+        return CGRect(x: CGFloat(xs.min()!), y: CGFloat(ys.min()!), width: CGFloat(xs.max()! - xs.min()!), height: CGFloat(ys.max()! - ys.min()!))
+    }
+
+    private func overlap(_ a: CGRect, _ b: CGRect) -> Float {
+        let intersection = a.intersection(b)
+        guard !intersection.isNull, !intersection.isEmpty else { return 0 }
+        let area = intersection.width * intersection.height
+        return Float(area / (a.width * a.height + b.width * b.height - area))
+    }
+
+    /// Three separated rays must cross the interior at centre depth and terminate beyond the back.
+    private func seesThrough(_ o: Obstacle, shot: CameraShot, features: [SIMD3<Float>], masks: [CGRect], margin: Float) -> Bool {
+        let y = o.displayY ?? o.center.y...(o.center.y + 2 * o.halfSize.x)
+        let origin = shot.position, delta = xz(o.center - origin), distance = simd_length(delta)
+        guard distance > o.boundingRadius else { return false }
+        let normal = delta / distance
+        var hits: [SIMD3<Float>] = []
+        for p in features {
+            let ray = p - origin, depth = simd_dot(xz(ray), normal)
+            guard depth > distance + o.boundingRadius + margin else { continue }
+            let hit = origin + ray * (distance / depth)
+            guard y.contains(hit.y), o.distance(to: xz(hit)) < 0.001,
+                  let pixel = Detection.project(p, shot) else { continue }
+            let n = Detection.portraitPoint(sensor: pixel, shot)
+            guard n.x > 0.05, n.x < 0.95, n.y > 0.05, n.y < 0.95,
+                  !masks.contains(where: { $0.contains(CGPoint(x: CGFloat(n.x), y: CGFloat(n.y))) }),
+                  hits.allSatisfy({ simd_distance($0, hit) > 0.04 }) else { continue }
+            hits.append(hit)
+            if hits.count == 3 { return true }
+        }
+        return false
     }
 
     /// One detector run: `found` are its footprints, `shot` the camera it ran on.
-    mutating func update(_ found: [Obstacle], shot: CameraShot, now: Double, tuning t: Tuning) {
-        var matched = Set<Int>()
-        for o in found where !isIgnored(xz(o.center)) {
-            let near = tracks.indices.min { simd_distance(tracks[$0].o.center, o.center) < simd_distance(tracks[$1].o.center, o.center) }
-            if let i = near, simd_distance(xz(tracks[i].o.center), xz(o.center)) < t.objectMergeDistance {
-                guard matched.insert(i).inserted else { continue } // one sighting per track per frame
+    mutating func update(_ found: [ObjectObservation], shot: CameraShot, now: Double, tuning t: Tuning,
+                         features: [SIMD3<Float>], masks: [CGRect]) {
+        let input = found.filter { !isIgnored(xz($0.obstacle.center)) }
+        var pairs: [(score: Float, track: Int, detection: Int)] = []
+        for i in tracks.indices {
+            let track = tracks[i], dt = Float(min(max(now - track.lastSeen, 0), 0.5))
+            let predicted = track.previousMeasurement + track.velocity * dt
+            guard !input.isEmpty, simd_distance(xz(track.o.center), xz(shot.position)) < t.objectRange + 1.5 else { continue }
+            let bounds = imageBounds(track.o, shot)
+            for j in input.indices where input[j].label == track.label {
+                let d = simd_distance(xz(predicted), xz(input[j].obstacle.center))
+                guard d < t.objectMergeDistance + min(simd_length(track.velocity) * dt, 0.4) else { continue }
+                pairs.append((d / t.objectMergeDistance + 0.5 * (1 - overlap(bounds, input[j].imageBox)), i, j))
+            }
+        }
+        var matched = Set<Int>(), assignments: [Int: Int] = [:]
+        for pair in pairs.sorted(by: { ($0.score, $0.track, $0.detection) < ($1.score, $1.track, $1.detection) }) where assignments[pair.detection] == nil && !matched.contains(pair.track) {
+            assignments[pair.detection] = pair.track
+            matched.insert(pair.track)
+        }
+        for (j, observation) in input.enumerated() {
+            let o = observation.obstacle
+            if let i = assignments[j] {
                 let age = min(1 + (now - tracks[i].firstSeen) / t.objectEvidenceInterval, 10)
                 let step = min((now - tracks[i].lastSeen) / t.objectEvidenceInterval, 1)
                 let weight = Float(step / age)
-                tracks[i].o.center += (o.center - tracks[i].o.center) * weight
-                tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) * weight
+                let shapeWeight: Float
+                if observation.measured {
+                    shapeWeight = now - tracks[i].lastMeasured > 1 ? 1 : max(weight, Float(step) * 0.4)
+                    tracks[i].lastMeasured = now
+                } else {
+                    shapeWeight = now - tracks[i].lastMeasured < 1 ? 0 : weight
+                }
+                let dt = Float(now - tracks[i].lastSeen)
+                let displacement = o.center - tracks[i].previousMeasurement
+                let v = displacement / max(dt, 0.01)
+                let moving = dt < 0.6 && simd_dot(v, tracks[i].velocity) > 0.12 && simd_length(displacement) > 0.01
+                tracks[i].velocity = dt < 0.6 && simd_length(v) < 3 ? (tracks[i].velocity + v) / 2 : .zero
+                tracks[i].previousMeasurement = o.center
+                tracks[i].o.center += (o.center - tracks[i].o.center) * (moving ? 1 : weight)
+                tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) * shapeWeight
                 // Rectangular footprints repeat after pi; interpolate along the shorter turn.
                 let angle = 2 * (o.yaw - tracks[i].o.yaw)
                 tracks[i].o.yaw += 0.5 * atan2(sin(angle), cos(angle)) * weight
                 if let old = tracks[i].o.displayY, let new = o.displayY {
-                    let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) * weight
-                    let top = old.upperBound + (new.upperBound - old.upperBound) * weight
+                    let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) * shapeWeight
+                    let top = old.upperBound + (new.upperBound - old.upperBound) * shapeWeight
                     tracks[i].o.displayY = bottom...top
                 } else if let new = o.displayY {
                     tracks[i].o.displayY = new
@@ -305,22 +398,24 @@ struct ObjectTracks {
                 tracks[i].misses = 0
                 tracks[i].lastMiss = -.infinity
             } else {
-                tracks.append(Track(o: o, firstSeen: now, lastSeen: now))
+                // Suppress near-identical duplicate observations without merging adjacent objects.
+                if matched.contains(where: { tracks[$0].label == observation.label && simd_distance(tracks[$0].previousMeasurement, o.center) < 0.05 }) { continue }
+                tracks.append(Track(id: nextID, label: observation.label, o: o, previousMeasurement: o.center, firstSeen: now, lastSeen: now, lastMeasured: observation.measured ? now : -.infinity))
+                nextID += 1
                 matched.insert(tracks.count - 1)
             }
         }
-        // Its spot is well inside the picture and close enough to be found, yet nothing was: a miss.
+        // No depth evidence, including when looking away, is unknown rather than clear.
         for i in tracks.indices where !matched.contains(i) {
             guard simd_distance(xz(tracks[i].o.center), xz(shot.position)) < t.objectRange,
-                  let px = Detection.project(tracks[i].o.center, shot) else { continue }
-            let n = Detection.portraitPoint(sensor: px, shot)
-            if n.x > 0.1, n.x < 0.9, n.y > 0.1, n.y < 0.9,
-               now - tracks[i].lastMiss + 1e-6 >= t.objectEvidenceInterval {
+                  !features.isEmpty, now - tracks[i].lastMiss + 1e-6 >= t.objectEvidenceInterval else { continue }
+            if seesThrough(tracks[i].o, shot: shot, features: features, masks: masks, margin: t.carveMargin) {
                 tracks[i].misses += 1
                 tracks[i].lastMiss = now
             }
         }
-        tracks.removeAll { $0.misses >= t.objectForgetMisses }
+        let span = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
+        tracks.removeAll { $0.misses >= t.objectForgetMisses || (now - $0.lastSeen > 2 && ($0.seen < t.minObjectSightings || $0.lastSeen - $0.firstSeen + 1e-6 < span)) }
     }
 
     mutating func ignore(around c: SIMD2<Float>, radius: Float) {

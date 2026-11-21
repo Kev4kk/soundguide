@@ -4,6 +4,14 @@ import CoreVideo
 import simd
 @testable import SoundGuide
 
+private extension ObjectTracks {
+    mutating func update(_ boxes: [Obstacle], shot: CameraShot, now: Double, tuning t: Tuning,
+                         rays: [SIMD3<Float>] = [], masks: [CGRect] = []) {
+        update(boxes.map { ObjectObservation(obstacle: $0, label: "chair", imageBox: .null) },
+               shot: shot, now: now, tuning: t, features: rays, masks: masks)
+    }
+}
+
 final class DetectionTests: XCTestCase {
     let t = Tuning()
     let cam = SIMD3<Float>(0, 1.4, 0)
@@ -315,12 +323,21 @@ final class DetectionTests: XCTestCase {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
         for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
-        for i in 0..<t.objectForgetMisses { tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t) }
+        let rays: [SIMD3<Float>] = [-0.1, 0, 0.1].map { x in shot().position + (SIMD3<Float>(x, 0.25, -1.4) - shot().position) * 2 }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t, rays: rays)
+        }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(), now: 3 + Double(i) * 0.2, tuning: t, rays: rays, masks: [CGRect(x: 0, y: 0, width: 1, height: 1)])
+        }
+        for i in 0..<t.objectForgetMisses {
+            tr.update([], shot: shot(), now: 5 + Double(i) * 0.2, tuning: t)
+        }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
         // At 50 Hz only the first miss in each 200 ms interval counts.
-        for i in 0..<(10 * (t.objectForgetMisses - 1)) { tr.update([], shot: shot(), now: 3 + Double(i) * 0.02, tuning: t) }
+        for i in 0..<(10 * (t.objectForgetMisses - 1)) { tr.update([], shot: shot(), now: 7 + Double(i) * 0.02, tuning: t, rays: rays) }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        tr.update([], shot: shot(), now: 3 + Double(t.objectForgetMisses - 1) * 0.2, tuning: t)
+        tr.update([], shot: shot(), now: 7 + Double(t.objectForgetMisses - 1) * 0.2, tuning: t, rays: rays)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
     }
 
@@ -341,6 +358,22 @@ final class DetectionTests: XCTestCase {
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
         tr.update([box], shot: s, now: 0.42, tuning: t)
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+    }
+
+    func testMovingChairKeepsIdentityBesideStationaryChair() throws {
+        var tr = ObjectTracks()
+        let s = shot()
+        func chair(_ x: Float) -> Obstacle { Obstacle(center: [x, 0, -2], halfSize: [0.15, 0.15]) }
+        for i in 0..<3 { tr.update([chair(0), chair(0.45)], shot: s, now: Double(i) * 0.2, tuning: t) }
+        let ids = tr.confirmed(tuning: t).map(\.id)
+        XCTAssertEqual(ids.count, 2)
+        for i in 1...5 {
+            tr.update([chair(0.45), chair(-0.2 * Float(i))], shot: s, now: 0.4 + Double(i) * 0.2, tuning: t)
+        }
+        let result = tr.confirmed(tuning: t)
+        XCTAssertEqual(result.map(\.id), ids)
+        XCTAssertEqual(try XCTUnwrap(result.first).obstacle.center.x, -1, accuracy: 0.05)
+        XCTAssertEqual(try XCTUnwrap(result.last).obstacle.center.x, 0.45, accuracy: 0.01)
     }
 
     func testRemovedTrackStaysRemoved() {

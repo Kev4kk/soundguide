@@ -42,6 +42,7 @@ struct Detected: Equatable {
     enum Source: Equatable { case plane(UUID), points, object }
     let obstacle: Obstacle
     let source: Source
+    var trackID: Int? = nil
 }
 
 final class ARController: NSObject, ObservableObject, ARSessionDelegate {
@@ -263,11 +264,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private var trackedObjects: [Detected] {
-        tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
+        tracks.confirmed(tuning: tuning).map { Detected(obstacle: $0.obstacle, source: .object, trackID: $0.id) }
     }
 
-    /// YOLO boxes → floor footprints, using the pose the image was taken at. Labels are ignored, except people:
-    /// ponytail: people move, so they never enter the map; time-to-collision on live boxes if walkers need them.
+    /// Match same-class footprints using the image's own pose. People mask visibility but never enter the persistent map.
     private func runDetector(_ frame: ARFrame) {
         guard let model = detector, let floorY, !detectorBusy else { return }
         let thermal = ProcessInfo.processInfo.thermalState
@@ -281,25 +281,35 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let features = frame.rawFeaturePoints?.points ?? []
         let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
                               resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
+        let previousTracks = tracks
         visionQueue.async { [weak self] in
-            let found: [Obstacle]?
+            let found: [ObjectObservation]?
+            var masks: [CGRect] = []
             do {
-                found = try model.detect(in: image, orientation: .right).compactMap { o in
+                let boxes = try model.detect(in: image, orientation: .right)
+                masks = boxes.filter { ($0.labels.first?.confidence ?? 0) >= t.objectConfidence }.map(\.boundingBox)
+                found = boxes.compactMap { o in
                     guard let label = o.labels.first, label.confidence >= t.objectConfidence,
                           label.identifier != "person" else { return nil }
-                    return Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
+                    guard let fit = Detection.fitObject(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
                                                      minY: Float(o.boundingBox.minY), maxY: Float(o.boundingBox.maxY),
-                                                     shot, floorY: floorY, tuning: t, features: features)
+                                                     shot, floorY: floorY, tuning: t, features: features) else { return nil }
+                    return ObjectObservation(obstacle: fit.obstacle, label: label.identifier, imageBox: o.boundingBox, measured: fit.measured)
                 }
             } catch {
                 Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")
                 found = nil   // A failed request is not evidence that the room is empty.
             }
+            let updated = found.map { observations in
+                var next = previousTracks
+                next.update(observations, shot: shot, now: timestamp, tuning: t, features: features, masks: masks)
+                return next
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.detectorBusy = false
-                guard let found, self.autoDetect, self.trackingNormal, self.detectorGeneration == generation else { return }
-                self.tracks.update(found, shot: shot, now: timestamp, tuning: t)
+                guard let updated, self.autoDetect, self.trackingNormal, self.detectorGeneration == generation else { return }
+                self.tracks = updated
                 self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
             }
         }
@@ -378,7 +388,9 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         switch d.source {
         case .plane(let id): ignoredPlanes.insert(id)
         case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
-        case .object: tracks.ignore(around: xz(d.obstacle.center), radius: r)
+        case .object:
+            detectorGeneration &+= 1 // don't resurrect the removed track from an in-flight snapshot
+            tracks.ignore(around: xz(d.obstacle.center), radius: r)
         }
         let remaining = detected.filter { $0 != d }
         navigationObstacles = remaining.map { $0.obstacle.navigationFootprint }
