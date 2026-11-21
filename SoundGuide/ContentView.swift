@@ -79,18 +79,21 @@ struct ContentView: View {
     private var guideScreen: some View {
         ZStack(alignment: .topTrailing) {
             if coverScreen {
-                Button { ar.stopGuiding() } label: {
-                    VStack(spacing: 24) {
-                        guideInfo
-                        Text("Stop").font(.system(size: 64, weight: .bold))
+                // Walker's screen: two big targets, Play/Pause on top, Stop below.
+                VStack(spacing: 12) {
+                    guideInfo.padding(.top, 56)
+                    playButton(height: .infinity, fontSize: 48)
+                    Button { ar.stopGuiding() } label: {
+                        Text("Stop").font(.system(size: 40, weight: .bold))
+                            .frame(maxWidth: .infinity, minHeight: 110)
+                            .background(Color.red.opacity(0.8), in: RoundedRectangle(cornerRadius: 20))
                     }
-                    .padding()
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .foregroundStyle(.white)
-                    .background(Color.black)
+                    .accessibilityLabel("Stop guiding")
                 }
-                .ignoresSafeArea()
-                .accessibilityLabel("Stop guiding. \(ar.status)")
+                .padding()
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(Color.black.ignoresSafeArea())
             } else {
                 // Camera visible (helper watching): info on top, normal Stop button at the bottom.
                 VStack {
@@ -99,10 +102,14 @@ struct ContentView: View {
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                         .padding(.horizontal).padding(.top, 56)
                     Spacer()
-                    Button { ar.stopGuiding() } label: {
-                        Text("Stop").font(.title2.bold()).frame(maxWidth: .infinity).padding(8)
+                    HStack {
+                        playButton(height: 52, fontSize: 22)
+                        Button { ar.stopGuiding() } label: {
+                            Text("Stop").font(.title2.bold()).frame(maxWidth: .infinity, minHeight: 52)
+                                .background(Color.red, in: RoundedRectangle(cornerRadius: 14))
+                        }
                     }
-                    .buttonStyle(.borderedProminent).tint(.red).padding()
+                    .foregroundStyle(.white).padding()
                 }
             }
 
@@ -113,6 +120,16 @@ struct ContentView: View {
             }
             .buttonStyle(.bordered).tint(.white)
             .padding()
+        }
+    }
+
+    private func playButton(height: CGFloat, fontSize: CGFloat) -> some View {
+        Button(action: ar.toggleGuideAudio) {
+            Label(ar.guideAudioOn ? "Pause guide" : "Play guide", systemImage: ar.guideAudioOn ? "pause.fill" : "play.fill")
+                .font(.system(size: fontSize, weight: .bold))
+                .frame(maxWidth: .infinity, minHeight: height == .infinity ? 140 : height, maxHeight: height)
+                .background((ar.guideAudioOn ? Color.gray : Color.green).opacity(0.85),
+                            in: RoundedRectangle(cornerRadius: 20))
         }
     }
 

@@ -19,7 +19,7 @@ A sighted helper places objects in a room with an iPhone: **waypoints** to walk 
 4. Lines connect the waypoints so the helper can see the route.
 
 ### Guide mode (walker)
-The screen is one big Stop button over a black background, with VoiceOver labels, and `isIdleTimerDisabled = true` keeps it awake. Everything else is sound, speech and haptics. A **Show camera / Cover screen** toggle in the corner swaps the black cover for the live camera with a normal Stop button, so a helper can watch.
+The covered screen is black with two big targets: **Play/Pause guide** on top and **Stop** below. `isIdleTimerDisabled = true` keeps it awake. **Guiding starts paused.** Beacon pings and spoken directions only play while the guide is on. Pressing Play also speaks the directions immediately. Safety sounds always play: obstacle buzz, "Bump", "Hold still", and arrival. Haptics always run too. A **Show camera / Cover screen** toggle in the corner swaps the black cover for the live camera, with the same Play/Pause and Stop buttons along the bottom, so a helper can watch.
 
 On every `ARFrame`:
 1. **Listener.** `env.listenerPosition` is set to the camera position, and the orientation comes from the camera's forward (`-transform.columns.2`) and up (`columns.1`). ARKit and AVAudio both use right-handed axes with y up, so no conversion is needed.
@@ -83,7 +83,6 @@ These come after testing the route following and the time-to-collision warnings.
 
 1. **Walls and tables from ARKit planes.** No LiDAR needed. ARKit already finds flat surfaces. Add vertical planes (walls) to the planner grid as blocked cells, and horizontal planes about 0.3–1.2 m above the floor (tables, benches) as blocked areas. The helper then only places what ARKit misses, such as chair legs, bags and doorframes, and A* routes around walls with no extra code. A slow sweep of the room during setup lets ARKit map surfaces outside the current camera view, since detected planes persist.
 2. **More speech.** Speaking when you stop is built. Still to do:
-   - Tap the screen to hear the same message on demand.
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
 

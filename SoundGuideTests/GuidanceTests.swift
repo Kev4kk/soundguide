@@ -266,4 +266,15 @@ final class GuidanceTests: XCTestCase {
         let c = box(1, -1, half: [0.5, 0.25]).corners
         XCTAssertEqual(Set(c.map { [$0.x, $0.y] }), [[1.5, -1.25], [0.5, -1.25], [0.5, -0.75], [1.5, -0.75]])
     }
+
+    func testRequestedCalloutSpeaksImmediatelyEvenWhileWalking() {
+        var nav = Navigator()
+        let wps: [SIMD3<Float>] = [[0, 0, -9]]
+        XCTAssertNil(nav.tick(listener: origin, forward: north, now: 0, waypoints: wps, obstacles: [], tuning: t).callout)
+        nav.requestCallout()
+        let out = nav.tick(listener: [0, 1.5, -0.4], forward: north, now: 0.3, waypoints: wps, obstacles: [], tuning: t)
+        XCTAssertEqual(out.callout, "Waypoint 1, 8.6 metres. Straight ahead.")
+        XCTAssertNil(nav.tick(listener: [0, 1.5, -0.8], forward: north, now: 0.6, waypoints: wps, obstacles: [], tuning: t).callout,
+                     "one-shot")
+    }
 }

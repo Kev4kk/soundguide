@@ -253,8 +253,12 @@ struct Navigator {
     private var stillSince: Double?
     private var lastCallout = -Double.infinity
     private(set) var hits = 0
+    private var calloutRequested = false
     private(set) var touching: Set<Int> = []      // obstacle indices you're in contact with now
     private(set) var everHit: Set<Int> = []
+
+    /// Speak directions on the next tick, moving or not (the Play button).
+    mutating func requestCallout() { calloutRequested = true }
 
     var velocity: SIMD2<Float> {
         guard let a = samples.first, let b = samples.last, b.t - a.t > 0.2 else { return .zero }
@@ -279,7 +283,14 @@ struct Navigator {
                                 obstacles: obstacles, index: index, path: path, tuning: t)
 
         // Standing still for a moment: say which way to go and what's nearby, then repeat now and then.
-        if simd_length(velocity) >= t.stoppedSpeed || out.arrived {
+        if calloutRequested, out.beaconPosition != nil {
+            calloutRequested = false
+            stillSince = nil
+            lastCallout = now
+            out.callout = Guidance.callout(listener: l, forward: forward, steer: xz(out.beaconPosition!), waypointNumber: out.index + 1,
+                                           waypointDistance: Guidance.horizontalDistance(l, waypoints[out.index]),
+                                           obstacles: obstacles, tuning: t)
+        } else if simd_length(velocity) >= t.stoppedSpeed || out.arrived {
             stillSince = nil
             lastCallout = -.infinity
         } else {

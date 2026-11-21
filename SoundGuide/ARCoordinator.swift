@@ -24,6 +24,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
     @Published private(set) var map: GuideMap?
+    // Beacon pings and spoken directions only play while this is on. Safety sounds always play.
+    @Published private(set) var guideAudioOn = false
     private var lastMapUpdate: TimeInterval = 0
 
     private let audio = SpatialAudio()
@@ -167,14 +169,21 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         guard !waypoints.isEmpty else { status = "Place a waypoint first."; return }
         nav = Navigator()
         map = nil
+        guideAudioOn = false
         trackingLost = false
         lastHaptic = 0
         guiding = true
         headRef = nil
         UIApplication.shared.isIdleTimerDisabled = true
         audio.start()
-        audio.say("Guiding to waypoint 1 of \(waypoints.count)")
-        status = "Guiding to 1 of \(waypoints.count)"
+        audio.say("Guiding to waypoint 1 of \(waypoints.count). Press Play to hear the guide.")
+        status = "Guiding to 1 of \(waypoints.count). Guide paused"
+    }
+
+    func toggleGuideAudio() {
+        guideAudioOn.toggle()
+        if guideAudioOn { nav.requestCallout() } else { audio.say("Guide paused") }
+        tap.impactOccurred()
     }
 
     func stopGuiding(announce: String? = nil) {
@@ -231,13 +240,15 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if let callout = out.callout {
+        if guideAudioOn, let callout = out.callout {
             audio.say(callout, interrupt: false)
             status = callout
         }
         vibrate(out.haptic, now: frame.timestamp)
 
-        audio.update(listener: ear, forward: forward, output: out, now: frame.timestamp)
+        var heard = out
+        if !guideAudioOn { heard.beaconPosition = nil }   // no pings; obstacle buzz still plays
+        audio.update(listener: ear, forward: forward, output: heard, now: frame.timestamp)
 
         if frame.timestamp - lastMapUpdate > 0.1 || out.hitObstacle != nil {   // ~10 Hz is plenty for a map
             lastMapUpdate = frame.timestamp
