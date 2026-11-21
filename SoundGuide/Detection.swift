@@ -36,22 +36,27 @@ enum Detection {
             return simd_length(e) > 0.01 ? atan2(-e.y, e.x) : nil
         }
         guard !yaws.isEmpty else { return nil }
-        return box(around: p, yaws: yaws, pad: 0, minHalf: t.minDetectedHalfSize, y: c.map(\.y).reduce(0, +) / 4)
+        let ys = c.map(\.y)
+        var obstacle = box(around: p, yaws: yaws, pad: 0, minHalf: t.minDetectedHalfSize, y: ys.reduce(0, +) / 4)
+        let base = vertical ? ys.min()! : floorY
+        obstacle.displayY = base...max(base + 0.1, ys.max()!)
+        return obstacle
     }
 
     static let clusterYaws = stride(from: Float(0), to: .pi / 2, by: .pi / 36).map { $0 }   // every 5°; a box repeats after 90°
 
     /// One box per cluster of cell centres, halved along its long side while it's mostly empty (an L-shaped corner).
-    static func boxes(_ pts: [SIMD2<Float>], y: Float, tuning t: Tuning) -> [Obstacle] {
+    static func boxes(_ cells: [(center: SIMD2<Float>, top: Float)], floorY: Float, tuning t: Tuning) -> [Obstacle] {
         let s = t.detectCell
-        let o = box(around: pts, yaws: clusterYaws, pad: s / 2, minHalf: s / 2, y: y)
-        let fill = Float(pts.count) * s * s / (4 * o.halfSize.x * o.halfSize.y)
-        guard fill < t.minBoxFill, pts.count > 1 else { return [o] }
+        var o = box(around: cells.map(\.center), yaws: clusterYaws, pad: s / 2, minHalf: s / 2, y: floorY)
+        o.displayY = floorY...max(floorY + 0.1, cells.map(\.top).max()!)
+        let fill = Float(cells.count) * s * s / (4 * o.halfSize.x * o.halfSize.y)
+        guard fill < t.minBoxFill, cells.count > 1 else { return [o] }
         let long = o.halfSize.x >= o.halfSize.y ? SIMD2(cos(o.yaw), -sin(o.yaw)) : SIMD2(-sin(o.yaw), -cos(o.yaw))
         let mid = simd_dot(xz(o.center), long)
-        let a = pts.filter { simd_dot($0, long) < mid }, b = pts.filter { simd_dot($0, long) >= mid }
+        let a = cells.filter { simd_dot($0.center, long) < mid }, b = cells.filter { simd_dot($0.center, long) >= mid }
         guard !a.isEmpty, !b.isEmpty else { return [o] }
-        return boxes(a, y: y, tuning: t) + boxes(b, y: y, tuning: t)
+        return boxes(a, floorY: floorY, tuning: t) + boxes(b, floorY: floorY, tuning: t)
     }
 }
 
@@ -142,7 +147,10 @@ struct PointMap {
                     if left.remove(n) != nil { cluster.append(n) }
                 }}
             }
-            out += Detection.boxes(cluster.map { (SIMD2<Float>($0) + 0.5) * t.detectCell }, y: floorY, tuning: t)
+            let occupied = cluster.map { key in
+                ((SIMD2<Float>(key) + 0.5) * t.detectCell, cells[key]!.map { $0.p.y }.max()!)
+            }
+            out += Detection.boxes(occupied, floorY: floorY, tuning: t)
         }
         return out
     }
@@ -167,11 +175,16 @@ extension Detection {
         SIMD2(1 - p.y / s.resolution.y, 1 - p.x / s.resolution.x)
     }
 
-    /// Where the camera ray through a sensor pixel meets the floor; nil at or above the horizon.
-    static func floorHit(pixel p: SIMD2<Float>, _ s: CameraShot, floorY: Float) -> SIMD3<Float>? {
+    private static func worldRay(pixel p: SIMD2<Float>, _ s: CameraShot) -> SIMD3<Float> {
         let k = s.intrinsics
         let ray = SIMD3((p.x - k[2][0]) / k[0][0], -(p.y - k[2][1]) / k[1][1], -1)
-        let w = s.transform * SIMD4(ray, 0), d = SIMD3(w.x, w.y, w.z)
+        let w = s.transform * SIMD4(ray, 0)
+        return SIMD3(w.x, w.y, w.z)
+    }
+
+    /// Where the camera ray through a sensor pixel meets the floor; nil at or above the horizon.
+    static func floorHit(pixel p: SIMD2<Float>, _ s: CameraShot, floorY: Float) -> SIMD3<Float>? {
+        let d = worldRay(pixel: p, s)
         guard d.y < -1e-4 else { return nil }
         return s.position + d * ((floorY - s.position.y) / d.y)
     }
@@ -185,17 +198,25 @@ extension Detection {
 
     /// A detector box (portrait, normalized) as a floor footprint: its bottom edge is where the object stands.
     /// ponytail: one camera can't see depth, so the footprint is as deep as it is wide; the point map measures what it can.
-    static func objectFootprint(minX: Float, maxX: Float, minY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning) -> Obstacle? {
+    static func objectFootprint(minX: Float, maxX: Float, minY: Float, maxY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning) -> Obstacle? {
+        let midX = (minX + maxX) / 2
         guard minY > t.minBoxBottom,   // bottom cut off: where it meets the floor isn't in the picture
               let l = floorHit(pixel: sensorPixel(portrait: [minX, minY], s), s, floorY: floorY),
               let r = floorHit(pixel: sensorPixel(portrait: [maxX, minY], s), s, floorY: floorY),
-              let b = floorHit(pixel: sensorPixel(portrait: [(minX + maxX) / 2, minY], s), s, floorY: floorY)
+              let b = floorHit(pixel: sensorPixel(portrait: [midX, minY], s), s, floorY: floorY)
         else { return nil }
         let away = xz(b) - xz(s.position), dist = simd_length(away)
         guard dist > 0.1, dist <= t.objectRange else { return nil }
         let f = away / dist, w = min(max(simd_distance(xz(l), xz(r)), t.minObjectSize), t.maxObjectSize)
         let c = xz(b) + f * w / 2
-        return Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2), yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)))
+        // Intersect the top-centre ray with the upright front face through the ground hit.
+        // This estimates height at the near edge without changing the routing footprint.
+        let ray = worldRay(pixel: sensorPixel(portrait: [midX, maxY], s), s)
+        let forward = simd_dot(xz(ray), f)
+        let estimatedHeight = forward > 1e-4 ? s.position.y + ray.y * (dist / forward) - floorY : w
+        let height = min(max(estimatedHeight.isFinite ? estimatedHeight : w, t.minObjectSize), t.maxObjectDisplayHeight)
+        return Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2),
+                        yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)), displayY: floorY...(floorY + height))
     }
 }
 
@@ -219,6 +240,13 @@ struct ObjectTracks {
                 let n = Float(min(tracks[i].seen + 1, 10))   // running mean, then slow drift
                 tracks[i].o.center += (o.center - tracks[i].o.center) / n
                 tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) / n
+                if let old = tracks[i].o.displayY, let new = o.displayY {
+                    let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) / n
+                    let top = old.upperBound + (new.upperBound - old.upperBound) / n
+                    tracks[i].o.displayY = bottom...top
+                } else if let new = o.displayY {
+                    tracks[i].o.displayY = new
+                }
                 tracks[i].seen += 1
                 tracks[i].misses = 0
                 matched.insert(i)

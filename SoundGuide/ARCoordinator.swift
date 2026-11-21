@@ -96,7 +96,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var detectedEntities: [AnchorEntity] = []
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + detected.map(\.obstacle) }
+    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + detected.map { $0.obstacle.navigationFootprint } }
 
     override init() {
         super.init()
@@ -275,7 +275,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                     guard let label = o.labels.first, label.confidence >= t.objectConfidence,
                           label.identifier != "person" else { return nil }
                     return Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
-                                                     minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
+                                                     minY: Float(o.boundingBox.minY), maxY: Float(o.boundingBox.maxY),
+                                                     shot, floorY: floorY, tuning: t)
                 }
             } catch {
                 Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")
@@ -290,12 +291,40 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
+    /// A solid outline makes the volume visible without covering the object or camera feed.
+    private static func hitbox(_ o: Obstacle, color: UIColor) -> AnchorEntity {
+        guard let y = o.displayY else { return box(o, color: color) }
+        let half = SIMD3(o.halfSize.x, (y.upperBound - y.lowerBound) / 2, o.halfSize.y)
+        let anchor = AnchorEntity(world: SIMD3(o.center.x, y.lowerBound + half.y, o.center.z))
+        let frame = Entity()
+        frame.orientation = simd_quatf(angle: o.yaw, axis: [0, 1, 0])
+        anchor.addChild(frame)
+        let mesh = MeshResource.generateBox(size: 1)
+        let material = UnlitMaterial(color: color)
+        let thickness: Float = 0.015
+        for axis in 0..<3 {
+            var size = SIMD3<Float>(repeating: thickness)
+            size[axis] = half[axis] * 2 + thickness
+            let a = (axis + 1) % 3, b = (axis + 2) % 3
+            for sa: Float in [-1, 1] {
+                for sb: Float in [-1, 1] {
+                    let edge = ModelEntity(mesh: mesh, materials: [material])
+                    edge.scale = size
+                    edge.position[a] = sa * half[a]
+                    edge.position[b] = sb * half[b]
+                    frame.addChild(edge)
+                }
+            }
+        }
+        return anchor
+    }
+
     private func setDetected(_ d: [Detected]) {
         guard d != detected else { return }
         detected = d
         detectedEntities.forEach { arView.scene.removeAnchor($0) }
         detectedEntities = d.map {   // orange = planes and points, yellow = object detector
-            Self.box($0.obstacle, color: ($0.source == .object ? UIColor.systemYellow : .systemOrange).withAlphaComponent(0.5))
+            Self.hitbox($0.obstacle, color: $0.source == .object ? .systemYellow : .systemOrange)
         }
         detectedEntities.forEach { arView.scene.addAnchor($0) }
     }

@@ -46,6 +46,7 @@ final class DetectionTests: XCTestCase {
         let table = Detection.planeObstacle(corners: rect(y: 0.75), vertical: false, floorY: 0, tuning: t)!
         XCTAssertEqual(4 * table.halfSize.x * table.halfSize.y, 0.6, accuracy: 1e-3)   // tight, not an axis-aligned bound
         XCTAssertEqual(table.center.y, 0.75, accuracy: 1e-5)
+        XCTAssertEqual(table.displayY, 0...0.75)
         XCTAssertNil(Detection.planeObstacle(corners: rect(y: 0.02), vertical: false, floorY: 0, tuning: t))  // floor
         XCTAssertNil(Detection.planeObstacle(corners: rect(y: 1.5), vertical: false, floorY: 0, tuning: t))   // shelf
         XCTAssertNotNil(Detection.planeObstacle(corners: rect(y: 1.25), vertical: false, floorY: 0.5, tuning: t))
@@ -60,6 +61,8 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(obs.count, 1)
         XCTAssertEqual(obs[0].distance(to: [1, -2]), 0)
         XCTAssertEqual(obs[0].distance(to: [1, -2.5]), 0.3, accuracy: 0.1)
+        XCTAssertEqual(obs[0].displayY?.lowerBound, 0)
+        XCTAssertGreaterThan(obs[0].displayY?.upperBound ?? 0, 0.1)
     }
 
     func testOneSightingFloorClutterAndLonePointsDontCount() {
@@ -247,13 +250,26 @@ final class DetectionTests: XCTestCase {
 
     func testObjectFootprintStandsOnBoxBottom() {
         let s = shot()
-        let o = Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, s, floorY: 0, tuning: t)!
+        let o = Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: 0.85, s, floorY: 0, tuning: t)!
         XCTAssertEqual(o.center.x, 0, accuracy: 1e-4)
         XCTAssertEqual(o.distance(to: [0, -1.4]), 0, accuracy: 1e-3)    // bottom-centre is its near edge
         XCTAssertLessThan(o.center.z, -1.4)                              // and it extends away from the camera
         XCTAssertGreaterThan(o.halfSize.x, t.minObjectSize / 2 - 1e-5)
-        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.01, s, floorY: 0, tuning: t))  // bottom cut off
-        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.98, shot(pitch: -0.15), floorY: 0, tuning: t))  // near the horizon: too far or never meets the floor
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.01, maxY: 0.5, s, floorY: 0, tuning: t))  // bottom cut off
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.98, maxY: 1, shot(pitch: -0.15), floorY: 0, tuning: t))  // near the horizon: too far or never meets the floor
+    }
+
+    func testHitboxHeightUsesTopRayWithoutChangingFootprint() throws {
+        let s = shot()
+        let top = try XCTUnwrap(Detection.project([0, 0.8, -1.4], s))
+        let maxY = Detection.portraitPoint(sensor: top, s).y
+        let tall = try XCTUnwrap(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: maxY, s, floorY: 0, tuning: t))
+        let short = try XCTUnwrap(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, maxY: 0.6, s, floorY: 0, tuning: t))
+        let y = try XCTUnwrap(tall.displayY)
+        XCTAssertEqual(y.lowerBound, 0)
+        XCTAssertEqual(y.upperBound, 0.8, accuracy: 1e-4)
+        XCTAssertLessThan(try XCTUnwrap(short.displayY).upperBound, y.upperBound)
+        XCTAssertEqual(tall.navigationFootprint, short.navigationFootprint)
     }
 
     // MARK: Object tracks
