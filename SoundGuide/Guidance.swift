@@ -42,6 +42,35 @@ struct Tuning {
     // Route following.
     var lookahead: Float = 1.2             // beacon sits this far ahead along the planned route
     var offPathDistance: Float = 0.5       // replan when you drift this far off the route
+
+    // Automatic obstacles from ARKit planes and feature points (no LiDAR on this phone).
+    var detectCell: Float = 0.1            // floor cell size of the feature-point map
+    var detectMinHeight: Float = 0.1       // below this is floor clutter: rugs, cables
+    var detectMaxHeight: Float = 1.8       // above head height doesn't block walking
+    var detectRange: Float = 3             // feature depth gets too noisy beyond this without LiDAR
+    var minPointSightings = 3              // frames a feature must be tracked before it counts
+    var minPointsPerCell = 3
+    var minBoxFill: Float = 0.4            // split a cluster's box while it's less full than this
+    var tableMinHeight: Float = 0.3, tableMaxHeight: Float = 1.2
+    var minDetectedHalfSize: Float = 0.05  // walls are at least 10 cm thick
+    var carveRadius: Float = 0.05          // a line of sight this close to a stored point sees through it...
+    var carveMargin: Float = 0.3           // ...if the feature it reached is at least this far beyond
+    var forgetMisses = 5                   // seen-through checks (no fresh sighting in between) before a point is forgotten
+    var carveInterval: Double = 0.1        // seconds between seen-through checks
+    var maxCarveRays = 150                 // features per check; keeps it cheap on the main thread
+    var unstablePointLifetime: Double = 2  // drop points that never became stable after this long
+    var detectInterval: Double = 0.5       // seconds between obstacle map rebuilds
+    var removeRadius: Float = 0.5          // Remove picks a detected obstacle this close to the crosshair
+
+    // Object detector (YOLOv3-Tiny via Vision): a box on the floor where each detected object stands.
+    var objectInterval: Double = 0.2       // seconds between detector runs
+    var objectConfidence: Float = 0.5
+    var objectRange: Float = 4             // further boxes land too far off on the floor
+    var minBoxBottom: Float = 0.03         // a box touching the image bottom hides where it meets the floor
+    var minObjectSize: Float = 0.2, maxObjectSize: Float = 2
+    var objectMergeDistance: Float = 0.6   // a box this close to a known object is the same object
+    var minObjectSightings = 3
+    var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
 }
 
 enum Haptic: Equatable {
@@ -259,6 +288,7 @@ struct Navigator {
 
     /// Speak directions on the next tick, moving or not (the Play button).
     mutating func requestCallout() { calloutRequested = true }
+    private var plannedFor: [Obstacle] = []
 
     var velocity: SIMD2<Float> {
         guard let a = samples.first, let b = samples.last, b.t - a.t > 0.2 else { return .zero }
@@ -273,8 +303,10 @@ struct Navigator {
 
         if index < waypoints.count {
             let offPath = path.map { PathPlanner.pursuit(path: $0, from: p, lookahead: t.lookahead).offset > t.offPathDistance } ?? true
-            if offPath {
+            // Detected obstacles come and go mid-walk, so a changed map replans too.
+            if offPath || obstacles != plannedFor {
                 path = PathPlanner.plan(from: p, to: xz(waypoints[index]), obstacles: obstacles, clearance: t.bodyClearance)
+                plannedFor = obstacles
                 replans += 1
             }
         }

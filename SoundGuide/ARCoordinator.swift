@@ -2,6 +2,8 @@ import ARKit
 import RealityKit
 import SwiftUI
 import UIKit
+import CoreML
+import Vision
 
 enum ObjectKind { case waypoint, obstacle }
 
@@ -10,6 +12,12 @@ struct Placed {
     let position: SIMD3<Float>
     var obstacle: Obstacle?
     let entities: [AnchorEntity]   // marker, plus the route line for waypoints
+}
+
+struct Detected: Equatable {
+    enum Source: Equatable { case plane(UUID), points, object }
+    let obstacle: Obstacle
+    let source: Source
 }
 
 final class ARController: NSObject, ObservableObject, ARSessionDelegate {
@@ -27,6 +35,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     // Beacon pings and spoken directions only play while this is on. Safety sounds always play.
     @Published private(set) var guideAudioOn = false
     private var lastMapUpdate: TimeInterval = 0
+    @Published var autoDetect = true { didSet { if !autoDetect { setDetected([]) } } }
+    @Published private(set) var detected: [Detected] = []
 
     private let audio = SpatialAudio()
     private let head = HeadTracker()
@@ -41,9 +51,20 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private let success = UINotificationFeedbackGenerator()
     // Obstacle being dragged out: first corner, phone heading at press, live preview.
     private var drag: (corner: SIMD3<Float>, yaw: Float, last: SIMD3<Float>, preview: AnchorEntity)?
+    private var pointMap = PointMap()
+    private var ignoredPlanes = Set<UUID>()
+    private var lastBuild: TimeInterval = 0
+    private var floorY: Float?
+    // Object detector: runs off the main thread, one image at a time.
+    private let visionQueue = DispatchQueue(label: "detector", qos: .userInitiated)
+    private var detector: VNCoreMLModel?
+    private var detectorBusy = false
+    private var lastDetectorRun: TimeInterval = 0
+    private var tracks = ObjectTracks()
+    private var detectedEntities: [AnchorEntity] = []
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) }
+    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + detected.map(\.obstacle) }
 
     override init() {
         super.init()
@@ -59,6 +80,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         arView.addSubview(coaching)
         if tuning.useHeadTracking { head.start() }
+        visionQueue.async {   // loading takes a second or two
+            let model = try? VNCoreMLModel(for: YOLOv3Tiny(configuration: MLModelConfiguration()).model)
+            DispatchQueue.main.async { self.detector = model }
+        }
     }
 
     // MARK: Setup
@@ -98,7 +123,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             let f = -SIMD3(m.columns.2.x, 0, m.columns.2.z)
             if simd_length(f) > 0.3 { yaw = Guidance.yaw(of: f) }
         }
-        let preview = Self.box(Obstacle.fromCorners(a, a, yaw: yaw, tuning: tuning), alpha: 0.4)
+        let preview = Self.box(Obstacle.fromCorners(a, a, yaw: yaw, tuning: tuning), color: .systemRed.withAlphaComponent(0.4))
         arView.scene.addAnchor(preview)
         drag = (a, yaw, a, preview)
         status = "Move to the opposite corner, then let go"
@@ -111,10 +136,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         arView.scene.removeAnchor(d.preview)
         let b = crosshairHit() ?? d.last
         let o = Obstacle.fromCorners(d.corner, b, yaw: d.yaw, tuning: tuning)
-        let marker = Self.box(o, alpha: 0.8)
+        let marker = Self.box(o, color: .systemRed.withAlphaComponent(0.8))
         arView.scene.addAnchor(marker)
         placed.append(Placed(kind: .obstacle, position: o.center, obstacle: o, entities: [marker]))
-        status = String(format: "Obstacle %d: %.1f × %.1f m", obstacles.count, o.halfSize.x * 2, o.halfSize.y * 2)
+        status = String(format: "Obstacle %d: %.1f × %.1f m", placed.compactMap(\.obstacle).count, o.halfSize.x * 2, o.halfSize.y * 2)
         tap.impactOccurred()
     }
 
@@ -126,10 +151,9 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     /// Unit cube scaled to the obstacle: a 10 cm tall slab so it doesn't hide what's behind it.
-    private static func box(_ o: Obstacle, alpha: CGFloat) -> AnchorEntity {
+    private static func box(_ o: Obstacle, color: UIColor) -> AnchorEntity {
         let anchor = AnchorEntity(world: .zero)
-        let cube = ModelEntity(mesh: .generateBox(size: 1),
-                               materials: [SimpleMaterial(color: .systemRed.withAlphaComponent(alpha), isMetallic: false)])
+        let cube = ModelEntity(mesh: .generateBox(size: 1), materials: [SimpleMaterial(color: color, isMetallic: false)])
         anchor.addChild(cube)
         anchor.transform = boxTransform(o)
         return anchor
@@ -161,6 +185,107 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         bar.look(at: b, from: (a + b) / 2, relativeTo: nil)
         anchor.addChild(bar)
         return anchor
+    }
+
+    // MARK: Automatic obstacles
+
+    private func detect(_ frame: ARFrame) {
+        let m = frame.camera.transform
+        if let pc = frame.rawFeaturePoints {
+            pointMap.add(pc.points, ids: pc.identifiers, camera: SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z),
+                         now: frame.timestamp, tuning: tuning)
+        }
+        runDetector(frame)
+        guard frame.timestamp - lastBuild >= tuning.detectInterval else { return }
+        lastBuild = frame.timestamp
+
+        let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
+        let ground = planes.filter { a in
+            if case .ceiling = a.classification { return false }
+            return a.alignment == .horizontal
+        }
+        let floors = ground.filter { if case .floor = $0.classification { return true }; return false }
+        guard let floorY = (floors.isEmpty ? ground : floors).map({ Self.corners($0)[0].y }).min() else { return }
+        self.floorY = floorY
+
+        let planeBoxes = planes.compactMap { a -> Detected? in
+            guard !ignoredPlanes.contains(a.identifier) else { return nil }
+            return Detection.planeObstacle(corners: Self.corners(a), vertical: a.alignment == .vertical,
+                                           floorY: floorY, tuning: tuning).map { Detected(obstacle: $0, source: .plane(a.identifier)) }
+        }
+        // Points on a table top would only duplicate the table.
+        let pointBoxes = pointMap.build(floorY: floorY, now: frame.timestamp, tuning: tuning)
+            .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
+            .map { Detected(obstacle: $0, source: .points) }
+        let objectBoxes = tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
+        setDetected(planeBoxes + pointBoxes + objectBoxes)
+    }
+
+    /// YOLO boxes → floor footprints, using the pose the image was taken at. Labels are ignored, except people:
+    /// ponytail: people move, so they never enter the map; time-to-collision on live boxes if walkers need them.
+    private func runDetector(_ frame: ARFrame) {
+        guard let model = detector, let floorY, !detectorBusy,
+              frame.timestamp - lastDetectorRun >= tuning.objectInterval else { return }
+        detectorBusy = true
+        lastDetectorRun = frame.timestamp
+        let cam = frame.camera, image = frame.capturedImage, t = tuning
+        let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
+                              resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
+        visionQueue.async { [weak self] in
+            let request = VNCoreMLRequest(model: model)
+            request.imageCropAndScaleOption = .scaleFill   // whole field of view; boxes map back to the full image
+            try? VNImageRequestHandler(cvPixelBuffer: image, orientation: .right).perform([request])
+            let found = (request.results as? [VNRecognizedObjectObservation] ?? [])
+                .filter { $0.confidence >= t.objectConfidence && $0.labels.first?.identifier != "person" }
+                .compactMap { o in
+                    Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
+                                              minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
+                }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.detectorBusy = false
+                if self.autoDetect { self.tracks.update(found, shot: shot, tuning: t) }
+            }
+        }
+    }
+
+    private func setDetected(_ d: [Detected]) {
+        guard d != detected else { return }
+        detected = d
+        detectedEntities.forEach { arView.scene.removeAnchor($0) }
+        detectedEntities = d.map {   // orange = planes and points, yellow = object detector
+            Self.box($0.obstacle, color: ($0.source == .object ? UIColor.systemYellow : .systemOrange).withAlphaComponent(0.5))
+        }
+        detectedEntities.forEach { arView.scene.addAnchor($0) }
+    }
+
+    /// Deletes the detected obstacle under the crosshair, and keeps it from coming back.
+    /// ponytail: a removed plane is ignored by anchor ID; if ARKit later merges it into another plane, Remove again.
+    func removeDetected() {
+        guard let hit = crosshairHit() else { return noSurface() }
+        let p = xz(hit)
+        guard let d = detected.min(by: { $0.obstacle.distance(to: p) < $1.obstacle.distance(to: p) }),
+              d.obstacle.distance(to: p) < tuning.removeRadius
+        else { status = "No detected obstacle under the crosshair"; return }
+        let r = d.obstacle.boundingRadius + tuning.detectCell
+        switch d.source {
+        case .plane(let id): ignoredPlanes.insert(id)
+        case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
+        case .object: tracks.ignore(around: xz(d.obstacle.center), radius: r)
+        }
+        setDetected(detected.filter { $0 != d })
+        status = "Removed detected obstacle"
+        tap.impactOccurred()
+    }
+
+    /// World corners of the plane's extent, in order around it.
+    private static func corners(_ a: ARPlaneAnchor) -> [SIMD3<Float>] {
+        let e = a.planeExtent, r = simd_quatf(angle: e.rotationOnYAxis, axis: [0, 1, 0])
+        let signs: [SIMD2<Float>] = [[-1, -1], [1, -1], [1, 1], [-1, 1]]
+        return signs.map { s in
+            let w = a.transform * SIMD4(a.center + r.act(SIMD3(s.x * e.width / 2, 0, s.y * e.height / 2)), 1)
+            return SIMD3(w.x, w.y, w.z)
+        }
     }
 
     // MARK: Guide
@@ -202,6 +327,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         if ready != headphonesReady { headphonesReady = ready }
         if denied != motionAccessDenied { motionAccessDenied = denied }
         if drag != nil { updateDragPreview() }
+        if autoDetect && normal { detect(frame) }
         guard guiding else { return }
 
         // Never guide from a stale pose.
