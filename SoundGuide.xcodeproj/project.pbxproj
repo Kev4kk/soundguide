@@ -10,6 +10,7 @@
 		377AF2AE23FA0018848830F2 /* GuidanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */; };
 		45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */; };
 		78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */; };
+		81A4A4CB43B2C008EFCBE772 /* GuideMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */; };
 		83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 418FA0E1AAA825730B274295 /* SoundGuideApp.swift */; };
 		98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCF756858D75E950D24A515 /* HeadTracker.swift */; };
 		A533E65627AEB52FA3A7FFB6 /* ARCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */; };
@@ -30,6 +31,7 @@
 /* Begin PBXFileReference section */
 		05FC900B1A040F27B9D5DFFE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialAudio.swift; sourceTree = "<group>"; };
+		2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideMapView.swift; sourceTree = "<group>"; };
 		418FA0E1AAA825730B274295 /* SoundGuideApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGuideApp.swift; sourceTree = "<group>"; };
 		45C29884A245E36004313953 /* SoundGuide.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SoundGuide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Guidance.swift; sourceTree = "<group>"; };
@@ -74,6 +76,7 @@
 				DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */,
 				FD520BDF7885AD59B8F6B636 /* ContentView.swift */,
 				65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */,
+				2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */,
 				9DCF756858D75E950D24A515 /* HeadTracker.swift */,
 				05FC900B1A040F27B9D5DFFE /* Info.plist */,
 				A69F4C99C93D21040FD12441 /* PathPlanner.swift */,
@@ -176,6 +179,7 @@
 				A533E65627AEB52FA3A7FFB6 /* ARCoordinator.swift in Sources */,
 				D226B4EE7F79E276175B73AD /* ContentView.swift in Sources */,
 				78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */,
+				81A4A4CB43B2C008EFCBE772 /* GuideMapView.swift in Sources */,
 				98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */,
 				FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */,
 				83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */,

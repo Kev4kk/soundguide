@@ -243,4 +243,27 @@ final class GuidanceTests: XCTestCase {
         for k in 1...5 { XCTAssertNil(tick(10.1 + Double(k) * 0.2, at: [0, 1.5, -0.5])) }
         XCTAssertNotNil(tick(12.2, at: [0, 1.5, -0.5]))
     }
+
+    // MARK: Hits
+
+    func testHitRegistersOncePerContact() {
+        var nav = Navigator()
+        let wps: [SIMD3<Float>] = [[0, 0, -9]], obs = [box(0, -2)]   // edge at z = -1.8
+        func hit(_ z: Float, _ now: Double) -> Int? {
+            nav.tick(listener: [0, 1.5, z], forward: north, now: now, waypoints: wps, obstacles: obs, tuning: t).hitObstacle
+        }
+        XCTAssertNil(hit(-1.5, 0))                 // 30 cm from the edge
+        XCTAssertEqual(hit(-1.7, 0.1), 0)          // 10 cm: hit
+        XCTAssertNil(hit(-1.9, 0.2))               // still touching (inside): no repeat
+        XCTAssertNil(hit(-1.6, 0.3))               // backed off 20 cm: not far enough to re-arm
+        XCTAssertNil(hit(-1.7, 0.4))
+        XCTAssertNil(hit(-1.4, 0.5))               // 40 cm: re-armed
+        XCTAssertEqual(hit(-1.75, 0.6), 0)         // second hit
+        XCTAssertEqual(nav.hits, 2); XCTAssertEqual(nav.everHit, [0])
+    }
+
+    func testObstacleCorners() {
+        let c = box(1, -1, half: [0.5, 0.25]).corners
+        XCTAssertEqual(Set(c.map { [$0.x, $0.y] }), [[1.5, -1.25], [0.5, -1.25], [0.5, -0.75], [1.5, -0.75]])
+    }
 }

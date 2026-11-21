@@ -34,6 +34,11 @@ struct Tuning {
     var calloutObstacleRange: Float = 2.5  // mention obstacles whose edge is this close
     var calloutMaxObstacles = 2
 
+    // Hits: walking into an obstacle box.
+    // ponytail: measured from the phone, which is ~0.3 m in front of the body; tune hitRadius if hits feel late.
+    var hitRadius: Float = 0.15            // within this of the box edge counts as a hit
+    var hitRearm: Float = 0.15             // must back off this much further before the same box can hit again
+
     // Route following.
     var lookahead: Float = 1.2             // beacon sits this far ahead along the planned route
     var offPathDistance: Float = 0.5       // replan when you drift this far off the route
@@ -59,6 +64,7 @@ struct GuidanceOutput: Equatable {
     var obstacleStop: Bool
     var haptic: Haptic = .none
     var callout: String?           // speak this (set by Navigator when you've stopped)
+    var hitObstacle: Int?          // index of an obstacle you just walked into (set by Navigator)
 }
 
 func xz(_ v: SIMD3<Float>) -> SIMD2<Float> { SIMD2(v.x, v.z) }
@@ -94,6 +100,11 @@ struct Obstacle: Equatable {
     func distance(to p: SIMD2<Float>) -> Float { simd_distance(p, closestPoint(to: p)) }
 
     var boundingRadius: Float { simd_length(halfSize) }
+
+    var corners: [SIMD2<Float>] {
+        let c = xz(center), r = right * halfSize.x, f = fwd * halfSize.y
+        return [c + r + f, c - r + f, c - r - f, c + r - f]
+    }
 }
 
 enum Guidance {
@@ -241,6 +252,9 @@ struct Navigator {
     private var samples: [(t: Double, p: SIMD2<Float>)] = []
     private var stillSince: Double?
     private var lastCallout = -Double.infinity
+    private(set) var hits = 0
+    private(set) var touching: Set<Int> = []      // obstacle indices you're in contact with now
+    private(set) var everHit: Set<Int> = []
 
     var velocity: SIMD2<Float> {
         guard let a = samples.first, let b = samples.last, b.t - a.t > 0.2 else { return .zero }
@@ -276,6 +290,19 @@ struct Navigator {
                                                waypointDistance: Guidance.horizontalDistance(l, waypoints[out.index]),
                                                obstacles: obstacles, tuning: t)
                 lastCallout = now
+            }
+        }
+
+        // One hit per contact: register on entering, re-arm only after backing off.
+        for (i, o) in obstacles.enumerated() {
+            let d = o.distance(to: p)
+            if d < t.hitRadius, !touching.contains(i) {
+                touching.insert(i)
+                everHit.insert(i)
+                hits += 1
+                out.hitObstacle = i
+            } else if d > t.hitRadius + t.hitRearm {
+                touching.remove(i)
             }
         }
 

@@ -120,6 +120,11 @@ struct ContentView: View {
         VStack(spacing: 8) {
             Text(ar.status).font(.title3).multilineTextAlignment(.center)
             Text(ar.usingHeadTracking ? "Head tracking: AirPods" : "Direction: phone").font(.subheadline)
+            if let map = ar.map {
+                GuideMapView(map: map).frame(height: 260)
+                Text(String(format: "You: x %.1f m, z %.1f m · %d hit%@", map.me.x, map.me.y, map.hits, map.hits == 1 ? "" : "s"))
+                    .font(.caption.monospacedDigit())
+            }
         }
     }
 }

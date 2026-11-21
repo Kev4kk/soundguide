@@ -23,6 +23,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var usingHeadTracking = false
     @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
+    @Published private(set) var map: GuideMap?
+    private var lastMapUpdate: TimeInterval = 0
 
     private let audio = SpatialAudio()
     private let head = HeadTracker()
@@ -164,6 +166,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     func startGuiding() {
         guard !waypoints.isEmpty else { status = "Place a waypoint first."; return }
         nav = Navigator()
+        map = nil
         trackingLost = false
         lastHaptic = 0
         guiding = true
@@ -210,10 +213,16 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                            waypoints: wps, obstacles: obstacles, tuning: tuning)
         let index = out.index
 
+        if let i = out.hitObstacle {
+            success.notificationOccurred(.error)
+            audio.say("Bump")
+            status = "Hit obstacle \(i + 1). \(nav.hits) hit\(nav.hits == 1 ? "" : "s") so far"
+        }
         if out.finished {
             audio.playChime()
             success.notificationOccurred(.success)
-            stopGuiding(announce: "Arrived")
+            let hits = nav.hits
+            stopGuiding(announce: hits == 0 ? "Arrived, no obstacles hit" : "Arrived, \(hits) obstacle hit\(hits == 1 ? "" : "s")")
             return
         }
         if out.arrived {
@@ -229,6 +238,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         vibrate(out.haptic, now: frame.timestamp)
 
         audio.update(listener: ear, forward: forward, output: out, now: frame.timestamp)
+
+        if frame.timestamp - lastMapUpdate > 0.1 || out.hitObstacle != nil {   // ~10 Hz is plenty for a map
+            lastMapUpdate = frame.timestamp
+            map = GuideMap(me: xz(ear), heading: Guidance.yaw(of: forward), waypoints: wps.map(xz), index: index,
+                           obstacles: obstacles, path: nav.path ?? [], touching: nav.touching,
+                           everHit: nav.everHit, hits: nav.hits)
+        }
     }
 }
 
