@@ -16,6 +16,7 @@ struct ContentView: View {
                 .font(.headline).padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding(.top)
+            headphoneStatus
             Spacer()
             Image(systemName: "plus").font(.system(size: 36, weight: .light))
                 .foregroundStyle(.white).shadow(radius: 2)
@@ -38,11 +39,23 @@ struct ContentView: View {
         }
     }
 
+    private var headphoneStatus: some View {
+        let (text, color): (String, Color) =
+            ar.motionAccessDenied ? ("Motion access off: enable in Settings", .orange)
+            : ar.headphonesReady ? ("Head tracking AirPods connected", .green)
+            : ("No head tracking AirPods, using phone direction", .secondary)
+        return Label(text, systemImage: "airpodspro")
+            .font(.caption).foregroundStyle(color)
+            .padding(.horizontal, 10).padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
+    }
+
     // Covers the camera; the walker only needs one big button.
     private var guideScreen: some View {
         Button { ar.stopGuiding() } label: {
             VStack(spacing: 24) {
                 Text(ar.status).font(.title2)
+                Text(ar.usingHeadTracking ? "Head tracking: AirPods" : "Direction: phone").font(.headline)
                 Text("Stop").font(.system(size: 64, weight: .bold))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -11,8 +11,10 @@
 		45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */; };
 		78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */; };
 		83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 418FA0E1AAA825730B274295 /* SoundGuideApp.swift */; };
+		98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCF756858D75E950D24A515 /* HeadTracker.swift */; };
 		A533E65627AEB52FA3A7FFB6 /* ARCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */; };
 		D226B4EE7F79E276175B73AD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD520BDF7885AD59B8F6B636 /* ContentView.swift */; };
+		FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F4C99C93D21040FD12441 /* PathPlanner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -32,6 +34,8 @@
 		45C29884A245E36004313953 /* SoundGuide.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SoundGuide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Guidance.swift; sourceTree = "<group>"; };
 		8C6B9AC20D46DEF1E3A01F6D /* SoundGuideTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SoundGuideTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		9DCF756858D75E950D24A515 /* HeadTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadTracker.swift; sourceTree = "<group>"; };
+		A69F4C99C93D21040FD12441 /* PathPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathPlanner.swift; sourceTree = "<group>"; };
 		AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidanceTests.swift; sourceTree = "<group>"; };
 		DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ARCoordinator.swift; sourceTree = "<group>"; };
 		FD520BDF7885AD59B8F6B636 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -70,7 +74,9 @@
 				DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */,
 				FD520BDF7885AD59B8F6B636 /* ContentView.swift */,
 				65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */,
+				9DCF756858D75E950D24A515 /* HeadTracker.swift */,
 				05FC900B1A040F27B9D5DFFE /* Info.plist */,
+				A69F4C99C93D21040FD12441 /* PathPlanner.swift */,
 				418FA0E1AAA825730B274295 /* SoundGuideApp.swift */,
 				14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */,
 			);
@@ -170,6 +176,8 @@
 				A533E65627AEB52FA3A7FFB6 /* ARCoordinator.swift in Sources */,
 				D226B4EE7F79E276175B73AD /* ContentView.swift in Sources */,
 				78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */,
+				98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */,
+				FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */,
 				83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */,
 				45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */,
 			);

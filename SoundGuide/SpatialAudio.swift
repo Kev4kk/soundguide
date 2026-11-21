@@ -79,8 +79,8 @@ final class SpatialAudio {
 
     func playChime() { chime.scheduleBuffer(chimeTone, at: nil, options: .interrupts) }
 
-    func say(_ text: String) {
-        speech.stopSpeaking(at: .immediate)
+    func say(_ text: String, interrupt: Bool = true) {
+        if interrupt { speech.stopSpeaking(at: .immediate) }
         speech.speak(AVSpeechUtterance(string: text))
     }
 

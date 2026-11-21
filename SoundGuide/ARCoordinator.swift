@@ -19,12 +19,19 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var guiding = false
     @Published private(set) var status = ""
     @Published private(set) var trackingNormal = false
+    @Published private(set) var usingHeadTracking = false
+    @Published private(set) var headphonesReady = false
+    @Published private(set) var motionAccessDenied = false
 
     private let audio = SpatialAudio()
-    private var index = 0
+    private let head = HeadTracker()
+    // Phone heading and AirPods yaw captured together; assumes you face along the phone at that moment.
+    private var headRef: (phoneYaw: Float, headYaw: Double)?
+    private var nav = Navigator()
     private var trackingLost = false
-    private var wasTooClose = false
+    private var lastHaptic: TimeInterval = 0
     private let tap = UIImpactFeedbackGenerator(style: .medium)
+    private let light = UIImpactFeedbackGenerator(style: .light)
     private let warn = UIImpactFeedbackGenerator(style: .heavy)
     private let success = UINotificationFeedbackGenerator()
 
@@ -44,6 +51,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         coaching.goal = .anyPlane
         coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         arView.addSubview(coaching)
+        if tuning.useHeadTracking { head.start() }
     }
 
     // MARK: Setup
@@ -99,10 +107,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     func startGuiding() {
         guard !waypoints.isEmpty else { status = "Place a waypoint first."; return }
-        index = 0
+        nav = Navigator()
         trackingLost = false
-        wasTooClose = false
+        lastHaptic = 0
         guiding = true
+        headRef = nil
         UIApplication.shared.isIdleTimerDisabled = true
         audio.start()
         audio.say("Guiding to waypoint 1 of \(waypoints.count)")
@@ -111,6 +120,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     func stopGuiding(announce: String? = nil) {
         guiding = false
+        usingHeadTracking = false
         UIApplication.shared.isIdleTimerDisabled = false
         if let announce { audio.say(announce) } else { audio.stop() }
         status = announce ?? "Stopped"
@@ -120,11 +130,15 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let normal: Bool
         if case .normal = frame.camera.trackingState { normal = true } else { normal = false }
         if normal != trackingNormal { trackingNormal = normal }
+        let ready = head.isLive, denied = head.accessDenied
+        if ready != headphonesReady { headphonesReady = ready }
+        if denied != motionAccessDenied { motionAccessDenied = denied }
         guard guiding else { return }
 
         // Never guide from a stale pose.
         guard normal else {
             if !trackingLost { trackingLost = true; audio.say("Hold still"); status = "Tracking lost" }
+            vibrate(.stop, now: frame.timestamp)
             return
         }
         trackingLost = false
@@ -132,12 +146,12 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let m = frame.camera.transform
         var ear = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
         ear.y += tuning.earHeightAbovePhone
-        let forward = -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z)
+        let forward = listenerForward(phone: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
 
         let wps = waypoints
-        let out = Guidance.step(listener: ear, forward: forward, waypoints: wps,
-                                obstacles: obstacles, index: index, tuning: tuning)
-        index = out.index
+        let out = nav.tick(listener: ear, forward: forward, now: frame.timestamp,
+                           waypoints: wps, obstacles: obstacles, tuning: tuning)
+        let index = out.index
 
         if out.finished {
             audio.playChime()
@@ -151,10 +165,48 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if out.obstacleTooClose && !wasTooClose { warn.impactOccurred(intensity: 1) }
-        wasTooClose = out.obstacleTooClose
+        vibrate(out.haptic, now: frame.timestamp)
 
         audio.update(listener: ear, forward: forward, output: out, now: frame.timestamp)
+    }
+}
+
+extension ARController {
+    /// AirPods head direction when available, otherwise the phone's direction.
+    fileprivate func listenerForward(phone: SIMD3<Float>) -> SIMD3<Float> {
+        guard tuning.useHeadTracking, head.isLive, let headYaw = head.yaw else {
+            headRef = nil   // re-align when AirPods come back
+            setHeadTracking(false)
+            return phone
+        }
+        if headRef == nil {
+            // Can't read a heading off a phone pointing at the floor; wait for a usable frame.
+            guard simd_length(SIMD2(phone.x, phone.z)) > 0.5 else { return phone }
+            headRef = (Guidance.yaw(of: phone), headYaw)
+        }
+        setHeadTracking(true)
+        let r = headRef!
+        return Guidance.forward(yaw: r.phoneYaw + tuning.headYawSign * Float(headYaw - r.headYaw))
+    }
+
+    /// Throttled off the frame clock, like the audio pings.
+    fileprivate func vibrate(_ haptic: Haptic, now: TimeInterval) {
+        switch haptic {
+        case .none: return
+        case .slowDown(let interval):
+            guard now - lastHaptic >= interval else { return }
+            light.impactOccurred(intensity: 0.7)
+        case .stop:
+            guard now - lastHaptic >= tuning.stopPulseInterval else { return }
+            warn.impactOccurred(intensity: 1)
+        }
+        lastHaptic = now
+    }
+
+    private func setHeadTracking(_ on: Bool) {
+        guard on != usingHeadTracking else { return }
+        usingHeadTracking = on
+        if guiding { audio.say(on ? "Head tracking on" : "Using phone direction", interrupt: false) }
     }
 }
 
