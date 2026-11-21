@@ -63,7 +63,8 @@ struct Tuning {
     var removeRadius: Float = 0.5          // Remove picks a detected obstacle this close to the crosshair
 
     // Object detector (YOLO26n via Vision): a box on the floor where each detected object stands.
-    var objectInterval: Double = 0.2       // seconds between detector runs
+    var objectEvidenceInterval: Double = 0.2   // preserve confirmation and forgetting at higher frame rates
+    var hotObjectInterval: Double = 0.2        // inference backoff when iOS reports thermal pressure
     var objectConfidence: Float = 0.5
     var objectRange: Float = 4             // further boxes land too far off on the floor
     var minBoxBottom: Float = 0.03         // a box touching the image bottom hides where it meets the floor

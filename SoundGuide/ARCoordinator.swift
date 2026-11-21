@@ -63,10 +63,14 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         didSet {
             guard autoDetect != oldValue else { return }
             detectorGeneration &+= 1
-            if !autoDetect { setDetected([]) }
+            if !autoDetect {
+                navigationObstacles = []
+                setDetected([])
+            }
         }
     }
-    @Published private(set) var detected: [Detected] = []
+    @Published private(set) var detectedCount = 0
+    private var detected: [Detected] = []
 
     private let audio = SpatialAudio()
     private let head = HeadTracker()
@@ -91,12 +95,15 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var detector: YOLO26Detector?
     private var detectorGeneration = 0
     private var detectorBusy = false
-    private var lastDetectorRun: TimeInterval = 0
+    private var lastDetectorRun = -TimeInterval.infinity
     private var tracks = ObjectTracks()
-    private var detectedEntities: [AnchorEntity] = []
+    private var navigationObstacles: [Obstacle] = []
+    private var geometryHitboxes: [Hitbox] = []
+    private var modelHitboxes: [Hitbox] = []
+    private lazy var hitboxMesh = MeshResource.generateBox(size: 1)
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + detected.map { $0.obstacle.navigationFootprint } }
+    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + navigationObstacles }
 
     override init() {
         super.init()
@@ -253,19 +260,28 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let pointBoxes = pointMap.build(floorY: floorY, now: frame.timestamp, tuning: tuning)
             .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
             .map { Detected(obstacle: $0, source: .points) }
-        let objectBoxes = tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
-        setDetected(planeBoxes + pointBoxes + objectBoxes)
+        let boxes = planeBoxes + pointBoxes + trackedObjects
+        // Keep route planning on its original cadence; render YOLO results as they arrive.
+        navigationObstacles = boxes.map { $0.obstacle.navigationFootprint }
+        setDetected(boxes)
+    }
+
+    private var trackedObjects: [Detected] {
+        tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
     }
 
     /// YOLO boxes → floor footprints, using the pose the image was taken at. Labels are ignored, except people:
     /// ponytail: people move, so they never enter the map; time-to-collision on live boxes if walkers need them.
     private func runDetector(_ frame: ARFrame) {
-        guard let model = detector, let floorY, !detectorBusy,
-              frame.timestamp - lastDetectorRun >= tuning.objectInterval else { return }
+        guard let model = detector, let floorY, !detectorBusy else { return }
+        let thermal = ProcessInfo.processInfo.thermalState
+        if thermal == .serious || thermal == .critical {
+            guard frame.timestamp - lastDetectorRun >= tuning.hotObjectInterval else { return }
+        }
         detectorBusy = true
         lastDetectorRun = frame.timestamp
         let cam = frame.camera, image = frame.capturedImage, t = tuning
-        let generation = detectorGeneration
+        let generation = detectorGeneration, timestamp = frame.timestamp
         let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
                               resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
         visionQueue.async { [weak self] in
@@ -286,47 +302,72 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 guard let self else { return }
                 self.detectorBusy = false
                 guard let found, self.autoDetect, self.trackingNormal, self.detectorGeneration == generation else { return }
-                self.tracks.update(found, shot: shot, tuning: t)
+                self.tracks.update(found, shot: shot, now: timestamp, tuning: t)
+                self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
             }
         }
     }
 
-    /// A solid outline makes the volume visible without covering the object or camera feed.
-    private static func hitbox(_ o: Obstacle, color: UIColor) -> AnchorEntity {
-        guard let y = o.displayY else { return box(o, color: color) }
-        let half = SIMD3(o.halfSize.x, (y.upperBound - y.lowerBound) / 2, o.halfSize.y)
-        let anchor = AnchorEntity(world: SIMD3(o.center.x, y.lowerBound + half.y, o.center.z))
-        let frame = Entity()
-        frame.orientation = simd_quatf(angle: o.yaw, axis: [0, 1, 0])
-        anchor.addChild(frame)
-        let mesh = MeshResource.generateBox(size: 1)
-        let material = UnlitMaterial(color: color)
-        let thickness: Float = 0.015
-        for axis in 0..<3 {
-            var size = SIMD3<Float>(repeating: thickness)
-            size[axis] = half[axis] * 2 + thickness
-            let a = (axis + 1) % 3, b = (axis + 2) % 3
-            for sa: Float in [-1, 1] {
-                for sb: Float in [-1, 1] {
-                    let edge = ModelEntity(mesh: mesh, materials: [material])
+    /// Reuse the outline's anchor, mesh and edges; inference only moves or resizes them.
+    private final class Hitbox {
+        let anchor = AnchorEntity(world: .zero)
+        private let frame = Entity()
+        private let edges: [ModelEntity]
+        private var obstacle: Obstacle?
+
+        init(mesh: MeshResource, color: UIColor) {
+            let material = UnlitMaterial(color: color)
+            edges = (0..<12).map { _ in ModelEntity(mesh: mesh, materials: [material]) }
+            edges.forEach { frame.addChild($0) }
+            anchor.addChild(frame)
+        }
+
+        func update(_ o: Obstacle) {
+            guard obstacle != o else { return }
+            obstacle = o
+            let y = o.displayY ?? o.center.y...(o.center.y + 0.1)
+            let half = SIMD3(o.halfSize.x, (y.upperBound - y.lowerBound) / 2, o.halfSize.y)
+            frame.position = SIMD3(o.center.x, y.lowerBound + half.y, o.center.z)
+            frame.orientation = simd_quatf(angle: o.yaw, axis: [0, 1, 0])
+            let thickness: Float = 0.015
+            for axis in 0..<3 {
+                var size = SIMD3<Float>(repeating: thickness)
+                size[axis] = half[axis] * 2 + thickness
+                let a = (axis + 1) % 3, b = (axis + 2) % 3
+                for i in 0..<4 {
+                    let edge = edges[axis * 4 + i]
+                    var position = SIMD3<Float>.zero
+                    position[a] = i < 2 ? -half[a] : half[a]
+                    position[b] = i.isMultiple(of: 2) ? -half[b] : half[b]
                     edge.scale = size
-                    edge.position[a] = sa * half[a]
-                    edge.position[b] = sb * half[b]
-                    frame.addChild(edge)
+                    edge.position = position
                 }
             }
         }
-        return anchor
+    }
+
+    private static func updateHitboxes(_ hitboxes: inout [Hitbox], with obstacles: [Obstacle],
+                                      mesh: MeshResource, color: UIColor, scene: RealityKit.Scene) {
+        while hitboxes.count > obstacles.count { scene.removeAnchor(hitboxes.removeLast().anchor) }
+        for (i, obstacle) in obstacles.enumerated() {
+            if i == hitboxes.count {
+                let box = Hitbox(mesh: mesh, color: color)
+                hitboxes.append(box)
+                scene.addAnchor(box.anchor)
+            }
+            hitboxes[i].update(obstacle)
+        }
     }
 
     private func setDetected(_ d: [Detected]) {
         guard d != detected else { return }
         detected = d
-        detectedEntities.forEach { arView.scene.removeAnchor($0) }
-        detectedEntities = d.map {   // orange = planes and points, yellow = object detector
-            Self.hitbox($0.obstacle, color: $0.source == .object ? .systemYellow : .systemOrange)
-        }
-        detectedEntities.forEach { arView.scene.addAnchor($0) }
+        if detectedCount != d.count { detectedCount = d.count }
+        let mesh = hitboxMesh, scene = arView.scene
+        Self.updateHitboxes(&geometryHitboxes, with: d.filter { $0.source != .object }.map(\.obstacle),
+                            mesh: mesh, color: .systemOrange, scene: scene)
+        Self.updateHitboxes(&modelHitboxes, with: d.filter { $0.source == .object }.map(\.obstacle),
+                            mesh: mesh, color: .systemYellow, scene: scene)
     }
 
     /// Deletes the detected obstacle under the crosshair, and keeps it from coming back.
@@ -343,7 +384,9 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
         case .object: tracks.ignore(around: xz(d.obstacle.center), radius: r)
         }
-        setDetected(detected.filter { $0 != d })
+        let remaining = detected.filter { $0 != d }
+        navigationObstacles = remaining.map { $0.obstacle.navigationFootprint }
+        setDetected(remaining)
         status = "Removed detected obstacle"
         tap.impactOccurred()
     }

@@ -278,10 +278,10 @@ final class DetectionTests: XCTestCase {
         var tr = ObjectTracks()
         let s = shot(), box = Obstacle(center: [0, 0, -1.6], halfSize: [0.2, 0.2])
         var moved = box; moved.center.x += 0.1
-        tr.update([box], shot: s, tuning: t)
-        tr.update([moved], shot: s, tuning: t)
+        tr.update([box], shot: s, now: 0, tuning: t)
+        tr.update([moved], shot: s, now: 0.2, tuning: t)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
-        tr.update([box, Obstacle(center: [2, 0, -1.6], halfSize: [0.2, 0.2])], shot: s, tuning: t)
+        tr.update([box, Obstacle(center: [2, 0, -1.6], halfSize: [0.2, 0.2])], shot: s, now: 0.4, tuning: t)
         let obs = tr.obstacles(tuning: t)
         XCTAssertEqual(obs.count, 1)
         XCTAssertEqual(obs[0].center.x, 0.1 / 3, accuracy: 1e-4)
@@ -290,21 +290,41 @@ final class DetectionTests: XCTestCase {
     func testTrackForgottenOnlyWhenItsSpotIsInViewAndEmpty() {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
-        for _ in 0..<t.objectForgetMisses { tr.update([], shot: shot(yaw: .pi), tuning: t) }   // looking away
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
+        for i in 0..<t.objectForgetMisses { tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t) }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        for _ in 0..<(t.objectForgetMisses - 1) { tr.update([], shot: shot(), tuning: t) }
+        // At 50 Hz only the first miss in each 200 ms interval counts.
+        for i in 0..<(10 * (t.objectForgetMisses - 1)) { tr.update([], shot: shot(), now: 3 + Double(i) * 0.02, tuning: t) }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        tr.update([], shot: shot(), tuning: t)
+        tr.update([], shot: shot(), now: 3 + Double(t.objectForgetMisses - 1) * 0.2, tuning: t)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
+
+    func testFastFramesDoNotConfirmTracksPrematurely() {
+        var tr = ObjectTracks()
+        let s = shot(), box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        for i in 0..<20 { tr.update([box], shot: s, now: Double(i) * 0.02, tuning: t) }
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+        tr.update([box], shot: s, now: 0.4, tuning: t)
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+    }
+
+    func testDuplicateBoxesDoNotCountAsMultipleSightings() {
+        var tr = ObjectTracks()
+        let s = shot(), box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        tr.update([box, box], shot: s, now: 0, tuning: t)
+        tr.update([box, box], shot: s, now: 0.4, tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+        tr.update([box], shot: s, now: 0.42, tuning: t)
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
     }
 
     func testRemovedTrackStaysRemoved() {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
         tr.ignore(around: [0, -1.4], radius: 0.5)
-        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        for i in 3..<6 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
     }
 }

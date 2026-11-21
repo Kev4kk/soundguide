@@ -69,12 +69,12 @@ struct ContentView: View {
     private var detectionBar: some View {
         HStack {
             Toggle(isOn: $ar.autoDetect) {
-                Text("Auto obstacles (\(ar.detected.count))").font(.subheadline.weight(.semibold))
+                Text("Auto obstacles (\(ar.detectedCount))").font(.subheadline.weight(.semibold))
             }
             .tint(.orange).fixedSize()
             Button("Remove", action: ar.removeDetected)
                 .buttonStyle(.borderedProminent).tint(.orange)
-                .disabled(!ar.autoDetect || ar.detected.isEmpty || !ar.trackingNormal)
+                .disabled(!ar.autoDetect || ar.detectedCount == 0 || !ar.trackingNormal)
                 .accessibilityHint("Deletes the detected obstacle under the crosshair")
         }
         .padding(.horizontal, 12).padding(.vertical, 6)

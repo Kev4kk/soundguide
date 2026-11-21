@@ -223,35 +223,48 @@ extension Detection {
 /// Detector boxes merged across frames into world-space objects. Confirmed after a few sightings;
 /// forgotten after several runs in which its spot was in view and nothing was detected there.
 struct ObjectTracks {
-    private struct Track { var o: Obstacle; var seen = 1, misses = 0 }
+    private struct Track {
+        var o: Obstacle
+        var firstSeen: Double
+        var lastSeen: Double
+        var lastMiss = -Double.infinity
+        var seen = 1, misses = 0
+    }
     private var tracks: [Track] = []
     private var ignored: [(center: SIMD2<Float>, radius: Float)] = []
 
     private func isIgnored(_ p: SIMD2<Float>) -> Bool { ignored.contains { simd_distance($0.center, p) < $0.radius } }
 
-    func obstacles(tuning t: Tuning) -> [Obstacle] { tracks.filter { $0.seen >= t.minObjectSightings }.map(\.o) }
+    func obstacles(tuning t: Tuning) -> [Obstacle] {
+        let minimumSpan = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
+        return tracks.filter { $0.seen >= t.minObjectSightings && $0.lastSeen - $0.firstSeen + 1e-6 >= minimumSpan }.map(\.o)
+    }
 
     /// One detector run: `found` are its footprints, `shot` the camera it ran on.
-    mutating func update(_ found: [Obstacle], shot: CameraShot, tuning t: Tuning) {
+    mutating func update(_ found: [Obstacle], shot: CameraShot, now: Double, tuning t: Tuning) {
         var matched = Set<Int>()
         for o in found where !isIgnored(xz(o.center)) {
             let near = tracks.indices.min { simd_distance(tracks[$0].o.center, o.center) < simd_distance(tracks[$1].o.center, o.center) }
             if let i = near, simd_distance(xz(tracks[i].o.center), xz(o.center)) < t.objectMergeDistance {
-                let n = Float(min(tracks[i].seen + 1, 10))   // running mean, then slow drift
-                tracks[i].o.center += (o.center - tracks[i].o.center) / n
-                tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) / n
+                guard matched.insert(i).inserted else { continue } // one sighting per track per frame
+                let age = min(1 + (now - tracks[i].firstSeen) / t.objectEvidenceInterval, 10)
+                let step = min((now - tracks[i].lastSeen) / t.objectEvidenceInterval, 1)
+                let weight = Float(step / age)
+                tracks[i].o.center += (o.center - tracks[i].o.center) * weight
+                tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) * weight
                 if let old = tracks[i].o.displayY, let new = o.displayY {
-                    let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) / n
-                    let top = old.upperBound + (new.upperBound - old.upperBound) / n
+                    let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) * weight
+                    let top = old.upperBound + (new.upperBound - old.upperBound) * weight
                     tracks[i].o.displayY = bottom...top
                 } else if let new = o.displayY {
                     tracks[i].o.displayY = new
                 }
                 tracks[i].seen += 1
+                tracks[i].lastSeen = now
                 tracks[i].misses = 0
-                matched.insert(i)
+                tracks[i].lastMiss = -.infinity
             } else {
-                tracks.append(Track(o: o))
+                tracks.append(Track(o: o, firstSeen: now, lastSeen: now))
                 matched.insert(tracks.count - 1)
             }
         }
@@ -260,7 +273,11 @@ struct ObjectTracks {
             guard simd_distance(xz(tracks[i].o.center), xz(shot.position)) < t.objectRange,
                   let px = Detection.project(tracks[i].o.center, shot) else { continue }
             let n = Detection.portraitPoint(sensor: px, shot)
-            if n.x > 0.1, n.x < 0.9, n.y > 0.1, n.y < 0.9 { tracks[i].misses += 1 }
+            if n.x > 0.1, n.x < 0.9, n.y > 0.1, n.y < 0.9,
+               now - tracks[i].lastMiss + 1e-6 >= t.objectEvidenceInterval {
+                tracks[i].misses += 1
+                tracks[i].lastMiss = now
+            }
         }
         tracks.removeAll { $0.misses >= t.objectForgetMisses }
     }
