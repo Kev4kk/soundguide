@@ -19,7 +19,9 @@ struct Tuning {
     var headYawSign: Float = 1
 
     // Obstacles: warned by time to collision, not distance.
-    var obstacleClearance: Float = 0.55    // obstacle half-size + half a body width; also the route's keep-out zone
+    var bodyClearance: Float = 0.35        // half a body width plus margin; keep-out distance from an obstacle's edge
+    var tapObstacleHalfSize: Float = 0.2   // a quick tap places a 40 cm box
+    var minDragSize: Float = 0.15          // press-to-release shorter than this counts as a tap
     var warnTime: Float = 1.5              // seconds to impact: buzz + slow-down taps
     var stopTime: Float = 0.6              // seconds to impact: stop pulses
     var minWarnSpeed: Float = 0.2          // m/s; standing or shuffling never warns
@@ -53,6 +55,39 @@ struct GuidanceOutput: Equatable {
 
 func xz(_ v: SIMD3<Float>) -> SIMD2<Float> { SIMD2(v.x, v.z) }
 
+/// Box on the floor plane, rotated by `yaw` (Guidance.yaw convention). `center.y` is its height, used for sound.
+struct Obstacle: Equatable {
+    var center: SIMD3<Float>
+    var halfSize: SIMD2<Float>   // along its own right / forward axes
+    var yaw: Float = 0
+
+    private var right: SIMD2<Float> { SIMD2(cos(yaw), -sin(yaw)) }
+    private var fwd: SIMD2<Float> { SIMD2(-sin(yaw), -cos(yaw)) }
+
+    /// Box spanned by two opposite corners, lined up with the direction the phone faced (`yaw`).
+    /// ponytail: two corners can't say how the box is turned, so it follows the phone; a third tap if that's not enough.
+    static func fromCorners(_ a: SIMD3<Float>, _ b: SIMD3<Float>, yaw: Float, tuning t: Tuning) -> Obstacle {
+        var o = Obstacle(center: (a + b) / 2, halfSize: SIMD2(repeating: t.tapObstacleHalfSize), yaw: yaw)
+        let d = xz(b) - xz(a)
+        if simd_length(d) >= t.minDragSize {
+            o.halfSize = simd_max(SIMD2(abs(simd_dot(d, o.right)), abs(simd_dot(d, o.fwd))) / 2, SIMD2(repeating: 0.05))
+        }
+        return o
+    }
+
+    func closestPoint(to p: SIMD2<Float>) -> SIMD2<Float> {
+        let d = p - xz(center)
+        let u = min(max(simd_dot(d, right), -halfSize.x), halfSize.x)
+        let w = min(max(simd_dot(d, fwd), -halfSize.y), halfSize.y)
+        return xz(center) + right * u + fwd * w
+    }
+
+    /// 0 inside the box, otherwise distance to its edge.
+    func distance(to p: SIMD2<Float>) -> Float { simd_distance(p, closestPoint(to: p)) }
+
+    var boundingRadius: Float { simd_length(halfSize) }
+}
+
 enum Guidance {
     /// Heading in radians, counterclockwise seen from above, 0 = ARKit's -z.
     static func yaw(of f: SIMD3<Float>) -> Float { atan2(-f.x, -f.z) }
@@ -81,22 +116,24 @@ enum Guidance {
         return simd_dot(simd_normalize(f), simd_normalize(d)) >= cos(degrees * .pi / 180)
     }
 
-    /// Seconds until walking at `v` brings you within `radius` of `o`; nil if your heading misses it
-    /// or you're moving away. 0 if already inside and still approaching.
-    static func timeToCollision(from p: SIMD2<Float>, velocity v: SIMD2<Float>, obstacle o: SIMD2<Float>, radius r: Float) -> Float? {
-        let d = o - p, vv = simd_dot(v, v), dv = simd_dot(d, v)
-        guard vv > 1e-6, dv > 0 else { return nil }
-        let c = simd_dot(d, d) - r * r
-        if c <= 0 { return 0 }
-        let disc = dv * dv - vv * c
-        guard disc >= 0 else { return nil }
-        return (dv - disc.squareRoot()) / vv
+    /// Seconds until walking at `v` brings you within `clearance` of the box's edge, up to `horizon`.
+    /// nil if your heading misses it, you're moving away, or it's further off than `horizon`.
+    /// ponytail: sampled every 50 ms; a closed-form ray vs rounded box if that's ever too coarse.
+    static func timeToCollision(from p: SIMD2<Float>, velocity v: SIMD2<Float>, obstacle o: Obstacle,
+                                clearance: Float, horizon: Float) -> Float? {
+        guard simd_length(v) > 1e-3 else { return nil }
+        let dt: Float = 0.05
+        if o.distance(to: p) < clearance {
+            return o.distance(to: p + v * dt) < o.distance(to: p) ? 0 : nil   // inside: only if still closing in
+        }
+        for t in stride(from: dt, through: horizon, by: dt) where o.distance(to: p + v * t) < clearance { return t }
+        return nil
     }
 
     /// One guidance tick. `listener` is ear position, `forward` is where the head/body faces,
     /// `velocity` is horizontal walking velocity, `path` is the planned route to `waypoints[index]`.
     static func step(listener l: SIMD3<Float>, forward: SIMD3<Float>, velocity: SIMD2<Float>,
-                     waypoints: [SIMD3<Float>], obstacles: [SIMD3<Float>],
+                     waypoints: [SIMD3<Float>], obstacles: [Obstacle],
                      index: Int, path: [SIMD2<Float>]?, tuning t: Tuning) -> GuidanceOutput {
         var out = GuidanceOutput(index: index, arrived: false, finished: false, beaconPosition: nil,
                                  pingInterval: t.pingFarInterval, onAxis: false, beaconVolume: 1,
@@ -123,11 +160,14 @@ enum Guidance {
         // ponytail: only the soonest-hit obstacle buzzes; one player per obstacle if rooms get crowded.
         if simd_length(velocity) >= t.minWarnSpeed,
            let (o, ttc) = obstacles
-               .compactMap({ o in timeToCollision(from: xz(l), velocity: velocity, obstacle: xz(o), radius: t.obstacleClearance).map { (o, $0) } })
+               .compactMap({ o in timeToCollision(from: xz(l), velocity: velocity, obstacle: o,
+                                                  clearance: t.bodyClearance, horizon: t.warnTime).map { (o, $0) } })
                .min(by: { $0.1 < $1.1 }),
            ttc < t.warnTime {
             let urgency = 1 - ttc / t.warnTime   // 0 at warnTime, 1 at impact
-            out.obstaclePosition = clampedElevation(listener: l, target: o, maxDegrees: t.maxElevationDegrees)
+            // Buzz from the nearest point of the box, so a sofa sounds like where you'd hit it.
+            let near = o.closestPoint(to: xz(l))
+            out.obstaclePosition = clampedElevation(listener: l, target: SIMD3(near.x, o.center.y, near.y), maxDegrees: t.maxElevationDegrees)
             out.obstacleVolume = 0.3 + 0.7 * urgency
             out.buzzInterval = t.buzzFarInterval + Double(urgency) * (t.buzzNearInterval - t.buzzFarInterval)
             out.obstacleStop = ttc < t.stopTime
@@ -156,7 +196,7 @@ struct Navigator {
     }
 
     mutating func tick(listener l: SIMD3<Float>, forward: SIMD3<Float>, now: Double,
-                       waypoints: [SIMD3<Float>], obstacles: [SIMD3<Float>], tuning t: Tuning) -> GuidanceOutput {
+                       waypoints: [SIMD3<Float>], obstacles: [Obstacle], tuning t: Tuning) -> GuidanceOutput {
         let p = xz(l)
         samples.append((now, p))
         samples.removeAll { now - $0.t > t.velocityWindow }
@@ -164,7 +204,7 @@ struct Navigator {
         if index < waypoints.count {
             let offPath = path.map { PathPlanner.pursuit(path: $0, from: p, lookahead: t.lookahead).offset > t.offPathDistance } ?? true
             if offPath {
-                path = PathPlanner.plan(from: p, to: xz(waypoints[index]), obstacles: obstacles.map(xz), clearance: t.obstacleClearance)
+                path = PathPlanner.plan(from: p, to: xz(waypoints[index]), obstacles: obstacles, clearance: t.bodyClearance)
                 replans += 1
             }
         }

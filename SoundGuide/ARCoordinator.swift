@@ -8,6 +8,7 @@ enum ObjectKind { case waypoint, obstacle }
 struct Placed {
     let kind: ObjectKind
     let position: SIMD3<Float>
+    var obstacle: Obstacle?
     let entities: [AnchorEntity]   // marker, plus the route line for waypoints
 }
 
@@ -34,9 +35,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private let light = UIImpactFeedbackGenerator(style: .light)
     private let warn = UIImpactFeedbackGenerator(style: .heavy)
     private let success = UINotificationFeedbackGenerator()
+    // Obstacle being dragged out: first corner, phone heading at press, live preview.
+    private var drag: (corner: SIMD3<Float>, yaw: Float, last: SIMD3<Float>, preview: AnchorEntity)?
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [SIMD3<Float>] { placed.filter { $0.kind == .obstacle }.map(\.position) }
+    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) }
 
     override init() {
         super.init()
@@ -56,30 +59,83 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     // MARK: Setup
 
-    func place(_ kind: ObjectKind) {
+    private func crosshairHit() -> SIMD3<Float>? {
         let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-        guard let hit = arView.raycast(from: center, allowing: .estimatedPlane, alignment: .any).first else {
-            status = "No surface under the crosshair. Move the phone slowly."
-            return
-        }
-        let c = hit.worldTransform.columns.3
-        let pos = SIMD3(c.x, c.y, c.z)
+        guard let c = arView.raycast(from: center, allowing: .estimatedPlane, alignment: .any).first?.worldTransform.columns.3
+        else { return nil }
+        return SIMD3(c.x, c.y, c.z)
+    }
 
+    private func noSurface() { status = "No surface under the crosshair. Move the phone slowly." }
+
+    func placeWaypoint() {
+        guard let pos = crosshairHit() else { return noSurface() }
         let marker = AnchorEntity(world: pos)
-        let mesh: MeshResource = kind == .waypoint ? .generateSphere(radius: 0.06) : .generateBox(size: 0.15)
-        let color: UIColor = kind == .waypoint ? .systemGreen : .systemRed
-        marker.addChild(ModelEntity(mesh: mesh, materials: [SimpleMaterial(color: color, isMetallic: false)]))
+        marker.addChild(ModelEntity(mesh: .generateSphere(radius: 0.06),
+                                    materials: [SimpleMaterial(color: .systemGreen, isMetallic: false)]))
         arView.scene.addAnchor(marker)
         var entities = [marker]
-
-        if kind == .waypoint, let prev = waypoints.last {
+        if let prev = waypoints.last {
             let line = Self.line(from: prev, to: pos)
             arView.scene.addAnchor(line)
             entities.append(line)
         }
-        placed.append(Placed(kind: kind, position: pos, entities: entities))
-        status = kind == .waypoint ? "Waypoint \(waypoints.count)" : "Obstacle \(obstacles.count)"
+        placed.append(Placed(kind: .waypoint, position: pos, entities: entities))
+        status = "Waypoint \(waypoints.count)"
         tap.impactOccurred()
+    }
+
+    /// Press on the Obstacle button: this corner. Release: the opposite corner. A quick tap gives a small box.
+    func beginObstacle() {
+        guard drag == nil else { return }
+        guard let a = crosshairHit() else { return noSurface() }
+        var yaw: Float = 0   // ponytail: phone pointing straight down has no heading; falls back to world axes
+        if let m = arView.session.currentFrame?.camera.transform {
+            let f = -SIMD3(m.columns.2.x, 0, m.columns.2.z)
+            if simd_length(f) > 0.3 { yaw = Guidance.yaw(of: f) }
+        }
+        let preview = Self.box(Obstacle.fromCorners(a, a, yaw: yaw, tuning: tuning), alpha: 0.4)
+        arView.scene.addAnchor(preview)
+        drag = (a, yaw, a, preview)
+        status = "Move to the opposite corner, then let go"
+        tap.impactOccurred()
+    }
+
+    func endObstacle() {
+        guard let d = drag else { return }
+        drag = nil
+        arView.scene.removeAnchor(d.preview)
+        let b = crosshairHit() ?? d.last
+        let o = Obstacle.fromCorners(d.corner, b, yaw: d.yaw, tuning: tuning)
+        let marker = Self.box(o, alpha: 0.8)
+        arView.scene.addAnchor(marker)
+        placed.append(Placed(kind: .obstacle, position: o.center, obstacle: o, entities: [marker]))
+        status = String(format: "Obstacle %d: %.1f × %.1f m", obstacles.count, o.halfSize.x * 2, o.halfSize.y * 2)
+        tap.impactOccurred()
+    }
+
+    private func updateDragPreview() {
+        guard let d = drag, let b = crosshairHit() else { return }
+        drag?.last = b
+        let o = Obstacle.fromCorners(d.corner, b, yaw: d.yaw, tuning: tuning)
+        d.preview.transform = Self.boxTransform(o)
+    }
+
+    /// Unit cube scaled to the obstacle: a 10 cm tall slab so it doesn't hide what's behind it.
+    private static func box(_ o: Obstacle, alpha: CGFloat) -> AnchorEntity {
+        let anchor = AnchorEntity(world: .zero)
+        let cube = ModelEntity(mesh: .generateBox(size: 1),
+                               materials: [SimpleMaterial(color: .systemRed.withAlphaComponent(alpha), isMetallic: false)])
+        anchor.addChild(cube)
+        anchor.transform = boxTransform(o)
+        return anchor
+    }
+
+    private static func boxTransform(_ o: Obstacle) -> Transform {
+        // Rotating about +y by yaw turns -z into Guidance.forward(yaw), so the box lines up with the obstacle's axes.
+        Transform(scale: SIMD3(o.halfSize.x * 2, 0.1, o.halfSize.y * 2),
+                  rotation: simd_quatf(angle: o.yaw, axis: [0, 1, 0]),
+                  translation: o.center + [0, 0.05, 0])
     }
 
     func undo() {
@@ -133,6 +189,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let ready = head.isLive, denied = head.accessDenied
         if ready != headphonesReady { headphonesReady = ready }
         if denied != motionAccessDenied { motionAccessDenied = denied }
+        if drag != nil { updateDragPreview() }
         guard guiding else { return }
 
         // Never guide from a stale pose.

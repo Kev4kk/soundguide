@@ -2,16 +2,16 @@ import simd
 
 /// Floor-plane route planning. Everything is 2D (x, z); height doesn't matter for walking.
 enum PathPlanner {
-    /// A* on a floor grid, smoothed to straight segments. Cells within `clearance` of an obstacle
+    /// A* on a floor grid, smoothed to straight segments. Cells within `clearance` of an obstacle's edge
     /// cost extra instead of being walls, so a start or goal inside that zone still gets a route
     /// (it just leaves the zone by the shortest way).
     /// ponytail: grid rebuilt per plan; ~150×150 cells at 10 cm, cache it if rooms get much bigger.
-    static func plan(from start: SIMD2<Float>, to goal: SIMD2<Float>, obstacles: [SIMD2<Float>],
+    static func plan(from start: SIMD2<Float>, to goal: SIMD2<Float>, obstacles: [Obstacle],
                      clearance: Float, cell: Float = 0.1) -> [SIMD2<Float>] {
         guard !obstacles.isEmpty else { return [start, goal] }
 
         let pad: Float = 2
-        let pts = obstacles + [start, goal]
+        let pts = obstacles.flatMap { o in [xz(o.center) - o.boundingRadius, xz(o.center) + o.boundingRadius] } + [start, goal]
         let lo = pts.reduce(pts[0]) { simd_min($0, $1) } - pad
         let hi = pts.reduce(pts[0]) { simd_max($0, $1) } + pad
         let w = Int(((hi.x - lo.x) / cell).rounded(.up)), h = Int(((hi.y - lo.y) / cell).rounded(.up))
@@ -22,7 +22,7 @@ enum PathPlanner {
             let x = min(max(Int(q.x.rounded(.down)), 0), w - 1), y = min(max(Int(q.y.rounded(.down)), 0), h - 1)
             return y * w + x
         }
-        let blocked = (0..<(w * h)).map { i in obstacles.contains { simd_distance(center(i), $0) < clearance } }
+        let blocked = (0..<(w * h)).map { i in obstacles.contains { $0.distance(to: center(i)) < clearance } }
 
         let s = index(start), g = index(goal)
         let penalty: Float = 50

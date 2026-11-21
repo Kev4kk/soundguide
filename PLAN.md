@@ -15,7 +15,7 @@ A sighted helper places objects in a room with an iPhone: **waypoints** to walk 
 ### Setup mode (sighted helper)
 1. Start a world-tracking session with `planeDetection = [.horizontal, .vertical]`. Show a "move the phone slowly" hint (`ARCoachingOverlayView`, which is built in) until tracking is normal.
 2. A center crosshair raycasts to any surface: `raycast(from: center, allowing: .estimatedPlane, alignment: .any)`. Objects therefore sit where they really are, whether that's the floor, a table or a shelf, and **the sound plays from that real height**.
-3. Two buttons: **Add Waypoint** adds a numbered green sphere, in order, and **Add Obstacle** adds a red cylinder. **Undo** and **Clear** are also there.
+3. **Waypoint** adds a green sphere; waypoints are numbered in placement order. **Obstacle** is press-and-hold: the crosshair position on press is one corner, and on release it's the opposite corner. A translucent red box previews the size while you hold. The box lines up with the direction the phone faced when you pressed, so face the object squarely. A quick tap, or a drag under 15 cm, places a 40 cm box. **Undo** and **Clear** are also there.
 4. Lines connect the waypoints so the helper can see the route.
 
 ### Guide mode (walker)
@@ -24,10 +24,10 @@ The screen is one big Start/Stop button with VoiceOver labels, and `isIdleTimerD
 On every `ARFrame`:
 1. **Listener.** `env.listenerPosition` is set to the camera position, and the orientation comes from the camera's forward (`-transform.columns.2`) and up (`columns.1`). ARKit and AVAudio both use right-handed axes with y up, so no conversion is needed.
 2. **Real height, clamped.** Each source plays from the object's real 3D position, except that its vertical angle from the listener is limited to **±35°**. Without the limit, a floor object at 0.5 m sits about 70° below the ears, and the sound turns into a confusing "somewhere underneath". Arrival and distance still use horizontal distance, so a target on a table counts as reached once you're standing at the table.
-3. **Beacon, following a planned route.** The `Navigator` plans a route to the current waypoint with A* on a 10 cm floor grid. Grid cells within **0.55 m** of an obstacle cost 50× more, so the route stays clear of obstacles but still exists when you start inside that zone. The route is then smoothed into straight segments. The ping plays from a point **1.2 m ahead along the route** (pure pursuit), not from the waypoint itself, so the sound curves around obstacles and pulls you back if you drift. The route is replanned when you're more than **0.5 m** off it, and for each new waypoint. The ping rate still tracks distance to the waypoint: **1.0 s at ≥4 m down to 0.2 s at 0.5 m**.
+3. **Beacon, following a planned route.** The `Navigator` plans a route to the current waypoint with A* on a 10 cm floor grid. Grid cells within **0.35 m** of an obstacle box's edge cost 50× more, so the route stays clear of obstacles but still exists when you start inside that zone. The route is then smoothed into straight segments. The ping plays from a point **1.2 m ahead along the route** (pure pursuit), not from the waypoint itself, so the sound curves around obstacles and pulls you back if you drift. The route is replanned when you're more than **0.5 m** off it, and for each new waypoint. The ping rate still tracks distance to the waypoint: **1.0 s at ≥4 m down to 0.2 s at 0.5 m**.
 4. **On-axis cue.** When the walker faces within **±15°** of the point the beacon plays from, the ping switches to a brighter tone. This resolves HRTF's front/back confusion, the same trick Soundscape uses.
 5. **Arrival.** Within **0.5 m**, play a chime and a haptic, and the speech synthesizer says "Waypoint 2 of 4" with `AVSpeechSynthesizer`. Then advance to the next waypoint. After the last one, say "Arrived" and stop.
-6. **Obstacles, by time to collision.** Walking velocity comes from the last **0.5 s** of positions. For each obstacle, the app works out when you'd come within 0.55 m of it on your current heading. When that's under **1.5 s**, a low buzz plays from the obstacle, louder and faster as impact gets closer, the beacon ducks to 30%, and the phone gives light slow-down taps. Under **0.6 s**, it gives strong stop pulses. Below **0.2 m/s** (standing or shuffling), walking away from an obstacle, or walking past it, nothing warns. Only the soonest obstacle on your heading buzzes. Within **1.0 m** of a waypoint, light taps also tell you to slow down.
+6. **Obstacles, by time to collision.** Walking velocity comes from the last **0.5 s** of positions. For each obstacle, the app works out when you'd come within **0.35 m** of its edge (the box's real size, turned the way it was placed) on your current heading. When that's under **1.5 s**, a low buzz plays from the nearest point of the box, louder and faster as impact gets closer, the beacon ducks to 30%, and the phone gives light slow-down taps. Under **0.6 s**, it gives strong stop pulses. Below **0.2 m/s** (standing or shuffling), walking away from an obstacle, or walking past it, nothing warns. Only the soonest obstacle on your heading buzzes. Within **1.0 m** of a waypoint, light taps also tell you to slow down.
 7. **Tracking lost.** If `camera.trackingState != .normal`, mute everything and say "Hold still". The app must never guide from a stale position.
 
 ### Audio graph
@@ -42,7 +42,7 @@ AVAudioPlayerNode (chime, mono) ───┘
 - Audio session: `.playback` with `.mixWithOthers` off.
 
 ### Tuning knob
-All the numbers above live in one `Tuning` struct: arrival radius, ping curve, on-axis cone, elevation clamp, duck level, obstacle clearance, warn and stop times, minimum warning speed, lookahead and off-route distance. Room acoustics, walking speed and individual hearing vary, so these values are meant to be adjusted during testing.
+All the numbers above live in one `Tuning` struct: arrival radius, ping curve, on-axis cone, elevation clamp, duck level, body clearance, tap obstacle size, minimum drag size, warn and stop times, minimum warning speed, lookahead and off-route distance. Room acoustics, walking speed and individual hearing vary, so these values are meant to be adjusted during testing.
 
 ## Files
 ```
@@ -83,7 +83,6 @@ These come after testing the route following and the time-to-collision warnings.
    - Tap the screen to hear "Waypoint 2, at 2 o'clock, 3 metres".
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
-3. **Obstacles with a size.** At the moment an obstacle is a point plus a fixed 0.55 m clearance. Add a choice of small, medium or large, or a box set with two corner taps, so a sofa or table blocks the right amount of the planner grid and the collision check.
 
 Later, if needed: detecting unplaced obstacles with an on-device depth-estimation model on the camera feed (battery and accuracy cost), and saving and reloading the room map with `ARWorldMap` (also fixes drift between sessions).
 

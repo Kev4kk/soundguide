@@ -2,6 +2,7 @@ import SwiftUI
 
 struct ContentView: View {
     @StateObject private var ar = ARController()
+    @State private var holdingObstacle = false
 
     var body: some View {
         ZStack {
@@ -23,8 +24,8 @@ struct ContentView: View {
                 .accessibilityHidden(true)
             Spacer()
             HStack {
-                Button("Waypoint") { ar.place(.waypoint) }.tint(.green)
-                Button("Obstacle") { ar.place(.obstacle) }.tint(.red)
+                Button("Waypoint", action: ar.placeWaypoint).tint(.green)
+                obstacleButton
                 Button("Undo", action: ar.undo).disabled(ar.placed.isEmpty)
                 Button("Clear", action: ar.clear).disabled(ar.placed.isEmpty)
             }
@@ -37,6 +38,29 @@ struct ContentView: View {
             .disabled(ar.waypoints.isEmpty)
             .padding()
         }
+    }
+
+    // Press = first corner, release = opposite corner. Not a Button: it needs touch-down and touch-up.
+    private var obstacleButton: some View {
+        Text("Obstacle")
+            .font(.body.weight(.semibold)).foregroundStyle(.white)
+            .padding(.horizontal, 12).padding(.vertical, 7)
+            .background(holdingObstacle ? Color.red.opacity(0.6) : Color.red, in: Capsule())
+            .opacity(ar.trackingNormal ? 1 : 0.4)
+            .gesture(DragGesture(minimumDistance: 0)
+                .onChanged { _ in
+                    guard ar.trackingNormal, !holdingObstacle else { return }
+                    holdingObstacle = true
+                    ar.beginObstacle()
+                }
+                .onEnded { _ in
+                    guard holdingObstacle else { return }
+                    holdingObstacle = false
+                    ar.endObstacle()
+                })
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Hold at one corner, move to the opposite corner, release")
+            .accessibilityAction { ar.beginObstacle(); ar.endObstacle() }
     }
 
     private var headphoneStatus: some View {
