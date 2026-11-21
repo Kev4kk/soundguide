@@ -18,6 +18,7 @@ struct ContentView: View {
                 .font(.headline).padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding(.top)
+            if ar.autoDetect { Text(ar.proximityStatus).font(.subheadline).padding(4).background(.thinMaterial) }
             if !ar.status.isEmpty { Text(ar.status).font(.subheadline).padding(4).background(.thinMaterial) }
             headphoneStatus
             Spacer()

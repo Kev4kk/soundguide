@@ -55,6 +55,14 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var trackingNormal = false
     @Published private(set) var cameraStatus = "Starting object detection…"
     private var cameraCueTiming = CameraCueTiming()
+    @Published private(set) var proximityStatus = "Distance not established"
+    private var liveRange = LiveRange()
+    private var needsRangeIntro = true
+    private var lastRangeSample = -Double.infinity
+    private var lastRangeSpeech = -Double.infinity
+    private var lastRangeBand = Int.max
+    private var lastRangeHit = -Double.infinity
+    private var classifiedFloor: Float?
     @Published private(set) var usingHeadTracking = false
     @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
@@ -67,6 +75,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             guard autoDetect != oldValue else { return }
             detectorGeneration &+= 1
             cameraCueTiming = CameraCueTiming()
+            resetRange()
             cameraStatus = autoDetect ? "Starting object detection…" : "Object detection off"
             if !autoDetect {
                 navigationObstacles = []
@@ -254,6 +263,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let floors = ground.filter { if case .floor = $0.classification { return true }; return false }
         guard let floorY = (floors.isEmpty ? ground : floors).map({ Self.corners($0)[0].y }).min() else { return }
         self.floorY = floorY
+        classifiedFloor = floors.map { Self.corners($0)[0].y }.min()
 
         let planeBoxes = planes.compactMap { a -> Detected? in
             guard !ignoredPlanes.contains(a.identifier) else { return nil }
@@ -326,7 +336,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 let liveStatus = found == nil ? "Object detection unavailable" : cameraMessage ?? "Scanning for objects"
                 if self.cameraStatus != liveStatus { self.cameraStatus = liveStatus }
                 // Never interrupt waypoint directions, tracking-loss alerts, or collision audio.
-                if !self.guiding, let cue = cameraMessage ?? (found == nil ? liveStatus : nil),
+                if !self.guiding, timestamp - self.lastRangeHit > 1.5, let cue = cameraMessage ?? (found == nil ? liveStatus : nil),
                    self.cameraCueTiming.shouldSpeak(cue, now: timestamp) { self.audio.say(cue) }
                 guard let updated, self.trackingNormal else { return }
                 self.tracks = updated
@@ -460,11 +470,72 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         status = announce ?? "Stopped"
     }
 
+    private func resetRange() {
+        liveRange = LiveRange()
+        needsRangeIntro = true
+        lastRangeBand = .max; lastRangeHit = -.infinity; lastRangeSpeech = -.infinity
+        proximityStatus = "Distance not established"
+    }
+
+    /// Independent of model inference, mapped hitboxes, waypoints and the Play button.
+    private func checkClearance(_ frame: ARFrame) {
+        let now = frame.timestamp
+        guard now - lastRangeSample >= 0.1 else { return }
+        lastRangeSample = now
+        let cam = frame.camera, m = cam.transform
+        let shot = CameraShot(transform: m, intrinsics: cam.intrinsics,
+                              resolution: [Float(cam.imageResolution.width), Float(cam.imageResolution.height)])
+        let flat = SIMD3(-m.columns.2.x, 0, -m.columns.2.z)
+        var wall: Float?
+        if simd_length(flat) > 0.5 {
+            // Only hit the observed polygon. An estimated/infinite wall could span a doorway.
+            let forward = simd_normalize(flat), right = simd_cross(forward, SIMD3(0, 1, 0))
+            for offset: Float in [-0.30, 0, 0.30] {
+                let origin = shot.position + right * offset
+                let query = ARRaycastQuery(origin: origin, direction: forward, allowing: .existingPlaneGeometry, alignment: .vertical)
+                if let hit = arView.session.raycast(query).first {
+                    let p = hit.worldTransform.columns.3
+                    let d = simd_dot(SIMD3(p.x, p.y, p.z) - origin, forward)
+                    if d > 0 { wall = min(wall ?? .infinity, d) }
+                }
+            }
+        }
+        let cloud = frame.rawFeaturePoints
+        guard let d = liveRange.clearance(points: cloud?.points ?? [], ids: cloud?.identifiers ?? [], shot: shot,
+                                           floor: classifiedFloor, plane: wall, now: now) else {
+            if now - lastRangeHit > 0.4 {
+                if proximityStatus != "Distance not established" { proximityStatus = "Distance not established" }
+                if lastRangeBand != .max, now - lastRangeHit > 1.5 {
+                    lastRangeBand = .max
+                    if !guiding { audio.say("Distance no longer available") }
+                }
+            }
+            return
+        }
+        lastRangeHit = now
+        let band = d <= 0.65 ? 0 : d <= 1.2 ? 1 : 2
+        let distance = max(0.25, (d * 4).rounded() / 4)
+        let message = String(format: "Obstacle ahead, about %g %@", Double(distance), distance == 1 ? "meter" : "meters")
+        if proximityStatus != message { proximityStatus = message }
+        vibrate(band == 0 ? .stop : .slowDown(interval: band == 1 ? 0.45 : 0.85), now: now)
+        if (band < lastRangeBand && now - lastRangeSpeech >= 0.4) || now - lastRangeSpeech >= (band == 0 ? 2 : 3) {
+            audio.say(message)
+            lastRangeSpeech = now; lastRangeBand = band
+        }
+    }
+
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let normal: Bool
         if case .normal = frame.camera.trackingState { normal = true } else { normal = false }
         if normal != trackingNormal {
-            if !normal { detectorGeneration &+= 1 }
+            if !normal {
+                detectorGeneration &+= 1
+                resetRange()
+                if autoDetect && !guiding {
+                    audio.say("Tracking lost. Distance unavailable")
+                    needsRangeIntro = false
+                }
+            }
             trackingNormal = normal
         }
         let ready = head.isLive, denied = head.accessDenied
@@ -472,7 +543,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         if denied != motionAccessDenied { motionAccessDenied = denied }
         if drag != nil { updateDragPreview() }
         if autoDetect {
-            if normal { detect(frame) } // Metric mapping still requires a trustworthy pose.
+            if needsRangeIntro {
+                needsRangeIntro = false
+                if !guiding { audio.say("Distance not established. Point the phone forward.") }
+            }
+            if normal { checkClearance(frame); detect(frame) } // Metric mapping still requires a trustworthy pose.
             runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
         }
         guard guiding else { return }
@@ -513,7 +588,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if guideAudioOn, let callout = out.callout {
+        if guideAudioOn, frame.timestamp - lastRangeHit > 1.5, let callout = out.callout {
             audio.say(callout, interrupt: false)
             status = callout
         }

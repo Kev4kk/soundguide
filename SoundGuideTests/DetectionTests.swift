@@ -304,6 +304,25 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(visible.last, all[1968])
     }
 
+    func testLiveClearanceWithoutFloorIgnoresIsolatedAndSidePoints() throws {
+        let s = shot(pitch: 0), points: [SIMD3<Float>] = [[0, 1.4, -0.3], [-0.1, 1.4, -1], [0, 1.3, -1.02], [0.1, 1.5, -1.05], [0.6, 1.4, -0.4]]
+        let ids = points.indices.map(UInt64.init)
+        var range = LiveRange()
+        XCTAssertNil(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 0))
+        XCTAssertEqual(try XCTUnwrap(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 0.1)), 1.02, accuracy: 0.001)
+        XCTAssertEqual(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: 0.7, now: 0.2), 0.7)
+        XCTAssertNil(range.clearance(points: points, ids: ids, shot: s, floor: nil, plane: nil, now: 1))
+        XCTAssertNil(range.clearance(points: [], ids: [], shot: s, floor: nil, plane: nil, now: 1.1))
+    }
+
+    func testLiveClearanceRejectsFloorAndBehindCameraEvidence() {
+        let points: [SIMD3<Float>] = [[0, 0.05, -1], [-0.1, 0.02, -1], [0.1, 0.04, -1], [0, 1.2, 1], [-0.1, 1.2, 1], [0.1, 1.2, 1]]
+        var range = LiveRange()
+        for now in [0.0, 0.1, 0.2] {
+            XCTAssertNil(range.clearance(points: points, ids: points.indices.map(UInt64.init), shot: shot(), floor: 0, plane: nil, now: now))
+        }
+    }
+
     func testCameraCuesNeedNoFloorAndIncludePeople() {
         let person = CameraObject(label: "person", bounds: CGRect(x: 0.05, y: 0.1, width: 0.4, height: 0.7))
         let chair = CameraObject(label: "chair", bounds: CGRect(x: 0.7, y: 0.2, width: 0.1, height: 0.1))

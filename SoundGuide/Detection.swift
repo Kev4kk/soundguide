@@ -264,6 +264,44 @@ extension Detection {
     }
 }
 
+/// Forward clearance in metres from the phone, not distance from the user's feet.
+/// Only compare currently visible, repeatable ARKit landmarks. A missing estimate is unknown.
+struct LiveRange {
+    private var previous: [UInt64: SIMD3<Float>] = [:]
+    private var lastSample = -Double.infinity
+    static let reach: Float = 2.0
+    static let halfWidth: Float = 0.4
+
+    mutating func clearance(points: [SIMD3<Float>], ids: [UInt64], shot: CameraShot,
+                            floor: Float?, plane: Float?, now: Double) -> Float? {
+        let origin = shot.position, axis = shot.transform.columns.2
+        let flat = SIMD2(-axis.x, -axis.z)
+        guard simd_length(flat) > 0.5 else { previous.removeAll(); return nil }
+        let forward = simd_normalize(flat), right = SIMD2(-forward.y, forward.x)
+        let inverse = shot.transform.inverse
+        var next: [UInt64: SIMD3<Float>] = [:], depths: [Float] = []
+        for (p, id) in zip(points, ids) {
+            let offset = p - origin, along = simd_dot(xz(offset), forward)
+            guard along > 0, along <= Self.reach, abs(simd_dot(xz(offset), right)) <= Self.halfWidth,
+                  p.y > (floor.map { $0 + 0.12 } ?? origin.y - 0.7), p.y < origin.y + 0.55 else { continue }
+            let local = inverse * SIMD4(p, 1), k = shot.intrinsics
+            guard local.z < -0.05 else { continue }
+            let u = k[0][0] * local.x / -local.z + k[2][0], v = k[2][1] - k[1][1] * local.y / -local.z
+            guard u >= 0, u < shot.resolution.x, v >= 0, v < shot.resolution.y else { continue }
+            next[id] = p
+            if now - lastSample < 0.35, let old = previous[id], simd_distance(p, old) <= 0.07 { depths.append(along) }
+        }
+        previous = next; lastSample = now
+        depths.sort()
+        var nearest = plane.flatMap { $0 > 0 && $0 <= Self.reach ? $0 : nil }
+        // Require three supporting landmarks within a 12 cm depth layer; ignore isolated close outliers.
+        for i in depths.indices where i + 2 < depths.count && depths[i + 2] - depths[i] <= 0.12 {
+            nearest = min(nearest ?? .infinity, depths[i + 1]); break
+        }
+        return nearest
+    }
+}
+
 /// Camera-relative observations, never a distance estimate or an all-clear.
 struct CameraObject {
     let label: String
