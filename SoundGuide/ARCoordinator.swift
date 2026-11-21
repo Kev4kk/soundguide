@@ -54,13 +54,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var status = ""
     @Published private(set) var trackingNormal = false
     @Published private(set) var cameraStatus = "Starting object detection…"
-    private var cameraCueTiming = CameraCueTiming()
+    private var beepTiming = ProximityBeepTiming()
     @Published private(set) var proximityStatus = "Distance not established"
     private var liveRange = LiveRange()
-    private var needsRangeIntro = true
     private var lastRangeSample = -Double.infinity
-    private var lastRangeSpeech = -Double.infinity
-    private var lastRangeBand = Int.max
     private var lastRangeHit = -Double.infinity
     private var classifiedFloor: Float?
     @Published private(set) var usingHeadTracking = false
@@ -74,7 +71,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         didSet {
             guard autoDetect != oldValue else { return }
             detectorGeneration &+= 1
-            cameraCueTiming = CameraCueTiming()
             resetRange()
             cameraStatus = autoDetect ? "Starting object detection…" : "Object detection off"
             if !autoDetect {
@@ -137,7 +133,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 Self.detectorLog.error("Could not load YOLO26: \(error.localizedDescription)")
                 DispatchQueue.main.async {
                     self?.cameraStatus = "Object detection unavailable"
-                    self?.audio.say("Object detection unavailable")
                 }
             }
         }
@@ -308,7 +303,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 let boxes = try model.detect(in: image, orientation: .right)
                 let confident = boxes.filter { ($0.labels.first?.confidence ?? 0) >= t.objectConfidence }
                 let objects = confident.compactMap { o in o.labels.first.map { CameraObject(label: $0.identifier, bounds: o.boundingBox) } }
-                cameraMessage = CameraObject.primary(objects)?.announcement
+                cameraMessage = CameraObject.primary(objects)?.displayText
                 masks = confident.map(\.boundingBox)
                 found = confident.compactMap { o in
                     guard let floorY = mappingFloor else { return nil }
@@ -335,9 +330,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 guard self.autoDetect, self.detectorGeneration == generation else { return }
                 let liveStatus = found == nil ? "Object detection unavailable" : cameraMessage ?? "Scanning for objects"
                 if self.cameraStatus != liveStatus { self.cameraStatus = liveStatus }
-                // Never interrupt waypoint directions, tracking-loss alerts, or collision audio.
-                if !self.guiding, timestamp - self.lastRangeHit > 1.5, let cue = cameraMessage ?? (found == nil ? liveStatus : nil),
-                   self.cameraCueTiming.shouldSpeak(cue, now: timestamp) { self.audio.say(cue) }
                 guard let updated, self.trackingNormal else { return }
                 self.tracks = updated
                 self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
@@ -472,8 +464,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     private func resetRange() {
         liveRange = LiveRange()
-        needsRangeIntro = true
-        lastRangeBand = .max; lastRangeHit = -.infinity; lastRangeSpeech = -.infinity
+        beepTiming = ProximityBeepTiming()
+        lastRangeHit = -.infinity
         proximityStatus = "Distance not established"
     }
 
@@ -505,10 +497,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                                            floor: classifiedFloor, plane: wall, now: now) else {
             if now - lastRangeHit > 0.4 {
                 if proximityStatus != "Distance not established" { proximityStatus = "Distance not established" }
-                if lastRangeBand != .max, now - lastRangeHit > 1.5 {
-                    lastRangeBand = .max
-                    if !guiding { audio.say("Distance no longer available") }
-                }
             }
             return
         }
@@ -518,10 +506,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let message = String(format: "Obstacle ahead, about %g %@", Double(distance), distance == 1 ? "meter" : "meters")
         if proximityStatus != message { proximityStatus = message }
         vibrate(band == 0 ? .stop : .slowDown(interval: band == 1 ? 0.45 : 0.85), now: now)
-        if (band < lastRangeBand && now - lastRangeSpeech >= 0.4) || now - lastRangeSpeech >= (band == 0 ? 2 : 3) {
-            audio.say(message)
-            lastRangeSpeech = now; lastRangeBand = band
-        }
+        if beepTiming.shouldBeep(distance: d, now: now) { audio.playProximityBeep() }
     }
 
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
@@ -531,10 +516,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             if !normal {
                 detectorGeneration &+= 1
                 resetRange()
-                if autoDetect && !guiding {
-                    audio.say("Tracking lost. Distance unavailable")
-                    needsRangeIntro = false
-                }
             }
             trackingNormal = normal
         }
@@ -543,10 +524,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         if denied != motionAccessDenied { motionAccessDenied = denied }
         if drag != nil { updateDragPreview() }
         if autoDetect {
-            if needsRangeIntro {
-                needsRangeIntro = false
-                if !guiding { audio.say("Distance not established. Point the phone forward.") }
-            }
             if normal { checkClearance(frame); detect(frame) } // Metric mapping still requires a trustworthy pose.
             runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
         }
@@ -588,7 +565,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if guideAudioOn, frame.timestamp - lastRangeHit > 1.5, let callout = out.callout {
+        if guideAudioOn, let callout = out.callout {
             audio.say(callout, interrupt: false)
             status = callout
         }

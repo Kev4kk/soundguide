@@ -307,7 +307,7 @@ struct CameraObject {
     let label: String
     let bounds: CGRect // Vision's normalized, upright portrait image
 
-    var announcement: String {
+    var displayText: String {
         let direction = bounds.midX < 0.33 ? "left" : bounds.midX > 0.67 ? "right" : "center"
         return "\(label.capitalized), \(direction)"
     }
@@ -321,13 +321,14 @@ struct CameraObject {
     }
 }
 
-struct CameraCueTiming {
-    private var last: String?
+struct ProximityBeepTiming {
     private var lastTime = -Double.infinity
 
-    mutating func shouldSpeak(_ text: String, now: Double) -> Bool {
-        guard now - lastTime >= (text == last ? 6 : 1.5) else { return false }
-        last = text; lastTime = now
+    mutating func shouldBeep(distance: Float, now: Double) -> Bool {
+        guard distance > 0, distance <= LiveRange.reach else { return false }
+        let interval = distance <= 0.65 ? 0.2 : distance <= 1.2 ? 0.45 : 0.85
+        guard now - lastTime >= interval else { return false }
+        lastTime = now
         return true
     }
 }
