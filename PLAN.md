@@ -19,7 +19,7 @@ A sighted helper places objects in a room with an iPhone: **waypoints** to walk 
 4. Lines connect the waypoints so the helper can see the route.
 
 ### Guide mode (walker)
-The screen is one big Start/Stop button with VoiceOver labels, and `isIdleTimerDisabled = true` keeps it awake. Everything else is sound, speech and haptics.
+The screen is one big Stop button over a black background, with VoiceOver labels, and `isIdleTimerDisabled = true` keeps it awake. Everything else is sound, speech and haptics. A **Show camera / Cover screen** toggle in the corner swaps the black cover for the live camera with a normal Stop button, so a helper can watch.
 
 On every `ARFrame`:
 1. **Listener.** `env.listenerPosition` is set to the camera position, and the orientation comes from the camera's forward (`-transform.columns.2`) and up (`columns.1`). ARKit and AVAudio both use right-handed axes with y up, so no conversion is needed.
@@ -29,6 +29,7 @@ On every `ARFrame`:
 5. **Arrival.** Within **0.5 m**, play a chime and a haptic, and the speech synthesizer says "Waypoint 2 of 4" with `AVSpeechSynthesizer`. Then advance to the next waypoint. After the last one, say "Arrived" and stop.
 6. **Obstacles, by time to collision.** Walking velocity comes from the last **0.5 s** of positions. For each obstacle, the app works out when you'd come within **0.35 m** of its edge (the box's real size, turned the way it was placed) on your current heading. When that's under **1.5 s**, a low buzz plays from the nearest point of the box, louder and faster as impact gets closer, the beacon ducks to 30%, and the phone gives light slow-down taps. Under **0.6 s**, it gives strong stop pulses. Below **0.2 m/s** (standing or shuffling), walking away from an obstacle, or walking past it, nothing warns. Only the soonest obstacle on your heading buzzes. Within **1.0 m** of a waypoint, light taps also tell you to slow down.
 7. **Tracking lost.** If `camera.trackingState != .normal`, mute everything and say "Hold still". The app must never guide from a stale position.
+8. **Spoken directions when you stop.** Below **0.15 m/s** for **1.5 s**, the app says where to go and what's close, relative to where you face, using clock directions. For example: "Waypoint 2, 3.4 metres. Turn right, 3 o'clock. Obstacle at 1 o'clock, 90 centimetres." The turn is toward the route's lookahead point, not the waypoint itself. Up to 2 obstacles within 2.5 m of their edge are mentioned. It repeats every **8 s** while you stay still, and resets once you walk.
 
 ### Audio graph
 ```
@@ -79,8 +80,8 @@ Info.plist                  // NSCameraUsageDescription
 These come after testing the route following and the time-to-collision warnings.
 
 1. **Walls and tables from ARKit planes.** No LiDAR needed. ARKit already finds flat surfaces. Add vertical planes (walls) to the planner grid as blocked cells, and horizontal planes about 0.3–1.2 m above the floor (tables, benches) as blocked areas. The helper then only places what ARKit misses, such as chair legs, bags and doorframes, and A* routes around walls with no extra code. A slow sweep of the room during setup lets ARKit map surfaces outside the current camera view, since detected planes persist.
-2. **Speech on demand and at turns.**
-   - Tap the screen to hear "Waypoint 2, at 2 o'clock, 3 metres".
+2. **More speech.** Speaking when you stop is built. Still to do:
+   - Tap the screen to hear the same message on demand.
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
 

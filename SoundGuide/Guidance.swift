@@ -27,6 +27,13 @@ struct Tuning {
     var minWarnSpeed: Float = 0.2          // m/s; standing or shuffling never warns
     var velocityWindow: Double = 0.5       // seconds of positions used to estimate walking velocity
 
+    // Spoken directions when the walker stands still.
+    var stoppedSpeed: Float = 0.15         // m/s; below this counts as standing still
+    var stoppedDelay: Double = 1.5         // seconds still before speaking
+    var calloutRepeat: Double = 8          // repeat while still standing
+    var calloutObstacleRange: Float = 2.5  // mention obstacles whose edge is this close
+    var calloutMaxObstacles = 2
+
     // Route following.
     var lookahead: Float = 1.2             // beacon sits this far ahead along the planned route
     var offPathDistance: Float = 0.5       // replan when you drift this far off the route
@@ -51,6 +58,7 @@ struct GuidanceOutput: Equatable {
     var buzzInterval: Double
     var obstacleStop: Bool
     var haptic: Haptic = .none
+    var callout: String?           // speak this (set by Navigator when you've stopped)
 }
 
 func xz(_ v: SIMD3<Float>) -> SIMD2<Float> { SIMD2(v.x, v.z) }
@@ -130,6 +138,48 @@ enum Guidance {
         return nil
     }
 
+    /// Signed horizontal angle in degrees from `forward` to `dir`, positive = to your left.
+    static func relativeAngle(forward: SIMD2<Float>, to dir: SIMD2<Float>) -> Float {
+        let a = (yaw(of: SIMD3(dir.x, 0, dir.y)) - yaw(of: SIMD3(forward.x, 0, forward.y))) * 180 / .pi
+        return a > 180 ? a - 360 : (a < -180 ? a + 360 : a)
+    }
+
+    /// 12 = ahead, 3 = right, 9 = left.
+    static func clock(_ degrees: Float) -> Int {
+        let h = (12 - Int((degrees / 30).rounded())) % 12
+        return h <= 0 ? h + 12 : h
+    }
+
+    static func turnPhrase(_ degrees: Float) -> String {
+        let side = degrees > 0 ? "left" : "right"
+        switch abs(degrees) {
+        case ..<15: return "Straight ahead"
+        case ..<45: return "Slightly \(side)"
+        case ..<135: return "Turn \(side)"
+        default: return "Turn around"
+        }
+    }
+
+    static func metres(_ d: Float) -> String { d < 1 ? String(format: "%.0f centimetres", (d * 10).rounded() * 10) : String(format: "%.1f metres", d) }
+
+    /// e.g. "Waypoint 2, 3.4 metres. Turn right, 3 o'clock. Obstacle at 1 o'clock, 80 centimetres."
+    static func callout(listener l: SIMD3<Float>, forward: SIMD3<Float>, steer: SIMD2<Float>, waypointNumber: Int,
+                        waypointDistance: Float, obstacles: [Obstacle], tuning t: Tuning) -> String {
+        let f = xz(forward), p = xz(l)
+        let a = relativeAngle(forward: f, to: steer - p)
+        var parts = ["Waypoint \(waypointNumber), \(metres(waypointDistance))",
+                     abs(a) < 15 ? "Straight ahead" : "\(turnPhrase(a)), \(clock(a)) o'clock"]
+        let near = obstacles.map { ($0.closestPoint(to: p), $0.distance(to: p)) }
+            .filter { $0.1 < t.calloutObstacleRange }
+            .sorted { $0.1 < $1.1 }
+            .prefix(t.calloutMaxObstacles)
+        for (point, d) in near {
+            let where_ = d < 0.05 ? "right next to you" : "at \(clock(relativeAngle(forward: f, to: point - p))) o'clock, \(metres(d))"
+            parts.append("Obstacle \(where_)")
+        }
+        return parts.joined(separator: ". ") + "."
+    }
+
     /// One guidance tick. `listener` is ear position, `forward` is where the head/body faces,
     /// `velocity` is horizontal walking velocity, `path` is the planned route to `waypoints[index]`.
     static func step(listener l: SIMD3<Float>, forward: SIMD3<Float>, velocity: SIMD2<Float>,
@@ -189,6 +239,8 @@ struct Navigator {
     private(set) var path: [SIMD2<Float>]?
     private(set) var replans = 0
     private var samples: [(t: Double, p: SIMD2<Float>)] = []
+    private var stillSince: Double?
+    private var lastCallout = -Double.infinity
 
     var velocity: SIMD2<Float> {
         guard let a = samples.first, let b = samples.last, b.t - a.t > 0.2 else { return .zero }
@@ -209,8 +261,24 @@ struct Navigator {
             }
         }
 
-        let out = Guidance.step(listener: l, forward: forward, velocity: velocity, waypoints: waypoints,
+        var out = Guidance.step(listener: l, forward: forward, velocity: velocity, waypoints: waypoints,
                                 obstacles: obstacles, index: index, path: path, tuning: t)
+
+        // Standing still for a moment: say which way to go and what's nearby, then repeat now and then.
+        if simd_length(velocity) >= t.stoppedSpeed || out.arrived {
+            stillSince = nil
+            lastCallout = -.infinity
+        } else {
+            let since = stillSince ?? now
+            stillSince = since
+            if now - since >= t.stoppedDelay, now - lastCallout >= t.calloutRepeat, let b = out.beaconPosition {
+                out.callout = Guidance.callout(listener: l, forward: forward, steer: xz(b), waypointNumber: out.index + 1,
+                                               waypointDistance: Guidance.horizontalDistance(l, waypoints[out.index]),
+                                               obstacles: obstacles, tuning: t)
+                lastCallout = now
+            }
+        }
+
         if out.index != index { path = nil }   // new target: plan on the next tick
         index = out.index
         return out

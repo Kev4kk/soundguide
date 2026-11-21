@@ -3,6 +3,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var ar = ARController()
     @State private var holdingObstacle = false
+    @State private var coverScreen = true
 
     var body: some View {
         ZStack {
@@ -76,17 +77,49 @@ struct ContentView: View {
 
     // Covers the camera; the walker only needs one big button.
     private var guideScreen: some View {
-        Button { ar.stopGuiding() } label: {
-            VStack(spacing: 24) {
-                Text(ar.status).font(.title2)
-                Text(ar.usingHeadTracking ? "Head tracking: AirPods" : "Direction: phone").font(.headline)
-                Text("Stop").font(.system(size: 64, weight: .bold))
+        ZStack(alignment: .topTrailing) {
+            if coverScreen {
+                Button { ar.stopGuiding() } label: {
+                    VStack(spacing: 24) {
+                        guideInfo
+                        Text("Stop").font(.system(size: 64, weight: .bold))
+                    }
+                    .padding()
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .foregroundStyle(.white)
+                    .background(Color.black)
+                }
+                .ignoresSafeArea()
+                .accessibilityLabel("Stop guiding. \(ar.status)")
+            } else {
+                // Camera visible (helper watching): info on top, normal Stop button at the bottom.
+                VStack {
+                    guideInfo
+                        .padding(12).frame(maxWidth: .infinity)
+                        .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
+                        .padding(.horizontal).padding(.top, 56)
+                    Spacer()
+                    Button { ar.stopGuiding() } label: {
+                        Text("Stop").font(.title2.bold()).frame(maxWidth: .infinity).padding(8)
+                    }
+                    .buttonStyle(.borderedProminent).tint(.red).padding()
+                }
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
-            .foregroundStyle(.white)
-            .background(Color.black)
+
+            Button { coverScreen.toggle() } label: {
+                Label(coverScreen ? "Show camera" : "Cover screen", systemImage: coverScreen ? "eye" : "eye.slash")
+                    .font(.subheadline.weight(.semibold))
+                    .padding(.horizontal, 12).padding(.vertical, 8)
+            }
+            .buttonStyle(.bordered).tint(.white)
+            .padding()
         }
-        .ignoresSafeArea()
-        .accessibilityLabel("Stop guiding. \(ar.status)")
+    }
+
+    private var guideInfo: some View {
+        VStack(spacing: 8) {
+            Text(ar.status).font(.title3).multilineTextAlignment(.center)
+            Text(ar.usingHeadTracking ? "Head tracking: AirPods" : "Direction: phone").font(.subheadline)
+        }
     }
 }

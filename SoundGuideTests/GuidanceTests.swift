@@ -204,4 +204,43 @@ final class GuidanceTests: XCTestCase {
         XCTAssertEqual(r.distance(to: [0, -1.5]), 0.5, accuracy: 1e-5)
         XCTAssertEqual(r.distance(to: [1.5, 0]), 1, accuracy: 1e-5)
     }
+
+    // MARK: Spoken directions
+
+    func testAnglesAndClock() {
+        let f = SIMD2<Float>(0, -1)
+        XCTAssertEqual(Guidance.relativeAngle(forward: f, to: [-1, 0]), 90, accuracy: 1e-4)   // left is positive
+        XCTAssertEqual(Guidance.relativeAngle(forward: f, to: [1, 0]), -90, accuracy: 1e-4)
+        XCTAssertEqual(abs(Guidance.relativeAngle(forward: f, to: [0, 1])), 180, accuracy: 1e-4)
+        XCTAssertEqual(Guidance.clock(0), 12); XCTAssertEqual(Guidance.clock(-90), 3)
+        XCTAssertEqual(Guidance.clock(90), 9); XCTAssertEqual(Guidance.clock(180), 6); XCTAssertEqual(Guidance.clock(-30), 1)
+        XCTAssertEqual(Guidance.turnPhrase(5), "Straight ahead")
+        XCTAssertEqual(Guidance.turnPhrase(-30), "Slightly right")
+        XCTAssertEqual(Guidance.turnPhrase(100), "Turn left")
+        XCTAssertEqual(Guidance.turnPhrase(-170), "Turn around")
+    }
+
+    func testCalloutText() {
+        let text = Guidance.callout(listener: origin, forward: north, steer: [3, 0], waypointNumber: 2,
+                                    waypointDistance: 3.4, obstacles: [box(0.5, -1.0), box(-2, 0), box(9, 9)], tuning: t)
+        XCTAssertEqual(text, "Waypoint 2, 3.4 metres. Turn right, 3 o'clock. Obstacle at 1 o'clock, 90 centimetres. Obstacle at 9 o'clock, 1.8 metres.")
+        XCTAssertTrue(Guidance.callout(listener: origin, forward: north, steer: [0, -2], waypointNumber: 1,
+                                       waypointDistance: 2, obstacles: [], tuning: t).contains("Straight ahead."))
+    }
+
+    func testNavigatorSpeaksWhenStoppedAndRepeats() {
+        var nav = Navigator()
+        let wps: [SIMD3<Float>] = [[3, 0, 0]]
+        func tick(_ now: Double, at l: SIMD3<Float>? = nil) -> String? {
+            nav.tick(listener: l ?? origin, forward: north, now: now, waypoints: wps, obstacles: [], tuning: t).callout
+        }
+        XCTAssertNil(tick(0)); XCTAssertNil(tick(1.0))
+        XCTAssertEqual(tick(1.6), "Waypoint 1, 3.0 metres. Turn right, 3 o'clock.")
+        XCTAssertNil(tick(2.0), "said once, not every frame")
+        XCTAssertNotNil(tick(9.7), "repeats while still standing")
+        // Walking (0.5 m in 0.4 s) cancels it; stopping again re-arms after the delay.
+        XCTAssertNil(tick(10.1, at: [0, 1.5, -0.5]))
+        for k in 1...5 { XCTAssertNil(tick(10.1 + Double(k) * 0.2, at: [0, 1.5, -0.5])) }
+        XCTAssertNotNil(tick(12.2, at: [0, 1.5, -0.5]))
+    }
 }

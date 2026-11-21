@@ -222,6 +222,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
+        if let callout = out.callout {
+            audio.say(callout, interrupt: false)
+            status = callout
+        }
         vibrate(out.haptic, now: frame.timestamp)
 
         audio.update(listener: ear, forward: forward, output: out, now: frame.timestamp)
