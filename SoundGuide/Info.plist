@@ -22,8 +22,12 @@
 	<string>1</string>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera tracks where you are in the room so sounds come from the right place.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Hold Ask and speak to ask about what's in front of the camera.</string>
 	<key>NSMotionUsageDescription</key>
 	<string>AirPods head movement keeps sounds fixed in the room when you turn your head.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Your question is turned into text on the iPhone, so it can be answered.</string>
 	<key>UILaunchScreen</key>
 	<dict/>
 	<key>UIRequiredDeviceCapabilities</key>

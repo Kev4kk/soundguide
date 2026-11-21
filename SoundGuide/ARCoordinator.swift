@@ -87,6 +87,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var detected: [Detected] = []
 
     private let audio = SpatialAudio()
+    lazy var asker = Asker { [weak self] in self?.audio.say($0, interrupt: false) }
     private let head = HeadTracker()
     // Phone heading and AirPods yaw captured together; assumes you face along the phone at that moment.
     private var headRef: (phoneYaw: Float, headYaw: Double)?
@@ -452,6 +453,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         headRef = nil
         UIApplication.shared.isIdleTimerDisabled = true
         audio.start()
+        asker.prepare()
         audio.say("Guiding to waypoint 1 of \(waypoints.count). Press Play to hear the guide.")
         status = "Guiding to 1 of \(waypoints.count). Guide paused"
     }
@@ -462,7 +464,16 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         tap.impactOccurred()
     }
 
+    func beginAsk() {
+        audio.stopSpeaking()
+        tap.impactOccurred()
+        asker.begin(camera: arView.session.currentFrame?.capturedImage)
+    }
+
+    func endAsk() { asker.end() }
+
     func stopGuiding(announce: String? = nil) {
+        asker.cancel()
         guiding = false
         usingHeadTracking = false
         UIApplication.shared.isIdleTimerDisabled = false
@@ -588,14 +599,14 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             audio.say("Reached \(index) of \(wps.count). Next.")
             status = "Guiding to \(index + 1) of \(wps.count)"
         }
-        if guideAudioOn, frame.timestamp - lastRangeHit > 1.5, let callout = out.callout {
+        if guideAudioOn, !asker.busy, frame.timestamp - lastRangeHit > 1.5, let callout = out.callout {
             audio.say(callout, interrupt: false)
             status = callout
         }
         vibrate(out.haptic, now: frame.timestamp)
 
         var heard = out
-        if !guideAudioOn { heard.beaconPosition = nil }   // no pings; obstacle buzz still plays
+        if !guideAudioOn || asker.busy { heard.beaconPosition = nil }   // no pings; obstacle buzz still plays
         audio.update(listener: ear, forward: forward, output: heard, now: frame.timestamp)
 
         if frame.timestamp - lastMapUpdate > 0.1 || out.hitObstacle != nil {   // ~10 Hz is plenty for a map
