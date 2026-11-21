@@ -278,6 +278,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         lastDetectorRun = frame.timestamp
         let cam = frame.camera, image = frame.capturedImage, t = tuning
         let generation = detectorGeneration, timestamp = frame.timestamp
+        let features = frame.rawFeaturePoints?.points ?? []
         let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
                               resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
         visionQueue.async { [weak self] in
@@ -288,7 +289,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                           label.identifier != "person" else { return nil }
                     return Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
                                                      minY: Float(o.boundingBox.minY), maxY: Float(o.boundingBox.maxY),
-                                                     shot, floorY: floorY, tuning: t)
+                                                     shot, floorY: floorY, tuning: t, features: features)
                 }
             } catch {
                 Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")

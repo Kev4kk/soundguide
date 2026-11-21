@@ -272,6 +272,20 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(tall.navigationFootprint, short.navigationFootprint)
     }
 
+    func testElevatedObjectUsesVisibleSurfaceInsteadOfFloor() throws {
+        let s = shot(pitch: 0)
+        func image(_ p: SIMD3<Float>) throws -> SIMD2<Float> {
+            Detection.portraitPoint(sensor: try XCTUnwrap(Detection.project(p, s)), s)
+        }
+        let lo = try image([-0.3, 0.95, -2]), hi = try image([0.3, 1.65, -2])
+        let features: [SIMD3<Float>] = [[-0.1, 1.2, -2], [0.1, 1.3, -2], [0, 1.5, -2], [0, 1.4, -2], [0, 1.4, -3.5]]
+        let o = try XCTUnwrap(Detection.objectFootprint(minX: lo.x, maxX: hi.x, minY: lo.y, maxY: hi.y, s, floorY: 0, tuning: t, features: features))
+        XCTAssertEqual(o.halfSize.x * 2, 0.6, accuracy: 0.01)
+        XCTAssertLessThan(o.halfSize.y, o.halfSize.x)
+        XCTAssertEqual(try XCTUnwrap(o.displayY).lowerBound, 0.95, accuracy: 0.01)
+        XCTAssertEqual(try XCTUnwrap(o.displayY).upperBound, 1.65, accuracy: 0.01)
+    }
+
     // MARK: Object tracks
 
     func testTracksConfirmAfterSightingsAndMerge() {

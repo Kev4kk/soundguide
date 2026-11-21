@@ -198,8 +198,46 @@ extension Detection {
 
     /// A detector box (portrait, normalized) as a floor footprint: its bottom edge is where the object stands.
     /// ponytail: one camera can't see depth, so the footprint is as deep as it is wide; the point map measures what it can.
-    static func objectFootprint(minX: Float, maxX: Float, minY: Float, maxY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning) -> Obstacle? {
+    static func objectFootprint(minX: Float, maxX: Float, minY: Float, maxY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning, features: [SIMD3<Float>] = []) -> Obstacle? {
         let midX = (minX + maxX) / 2
+        // Prefer metric features on the object over assuming that its image bottom touches the floor.
+        let centerRay = worldRay(pixel: sensorPixel(portrait: [midX, (minY + maxY) / 2], s), s)
+        let forward = simd_normalize(xz(centerRay))
+        let dx = (maxX - minX) * 0.15, dy = (maxY - minY) * 0.15
+        if minX + dx < maxX - dx, minY + dy < maxY - dy, forward.x.isFinite {
+            let depths = features.compactMap { p -> Float? in
+                guard p.y > floorY + 0.07, let px = project(p, s) else { return nil }
+                let n = portraitPoint(sensor: px, s)
+                guard (minX + dx...maxX - dx).contains(n.x), (minY + dy...maxY - dy).contains(n.y) else { return nil }
+                let d = simd_dot(xz(p - s.position), forward)
+                return d > 0.15 && d <= t.objectRange ? d : nil
+            }.sorted()
+            // Nearest supported depth layer; isolated points and a distant background don't stretch the box.
+            var start = 0
+            for end in depths.indices {
+                if end > 0, depths[end] - depths[end - 1] > 0.18 { start = end }
+                guard end + 1 == depths.count || depths[end + 1] - depths[end] > 0.18 else { continue }
+                let count = end - start + 1
+                guard count >= max(4, depths.count / 4) else { continue }
+                let near = depths[start + count / 10], far = depths[end - count / 10]
+                func face(_ x: Float, _ y: Float) -> SIMD3<Float>? {
+                    let r = worldRay(pixel: sensorPixel(portrait: [x, y], s), s)
+                    let dot = simd_dot(xz(r), forward)
+                    return dot > 0.05 ? s.position + r * (near / dot) : nil
+                }
+                let midY = (minY + maxY) / 2
+                guard let left = face(minX, midY), let right = face(maxX, midY),
+                      let bottom = face(midX, minY), let top = face(midX, maxY), top.y > bottom.y else { break }
+                let width = min(t.maxObjectSize, max(0.08, simd_distance(xz(left), xz(right))))
+                // Only visible surfaces are sampled: allow a shallow inferred thickness, not a full square.
+                let depth = min(t.maxObjectSize, max(far - near, 0.08, width * 0.25))
+                let center = xz((left + right) / 2) + forward * depth / 2
+                let base = max(floorY, bottom.y)
+                return Obstacle(center: SIMD3(center.x, floorY, center.y), halfSize: [width / 2, depth / 2],
+                                yaw: Guidance.yaw(of: SIMD3(forward.x, 0, forward.y)),
+                                displayY: base...max(base + 0.08, min(top.y, base + t.maxObjectDisplayHeight)))
+            }
+        }
         guard minY > t.minBoxBottom,   // bottom cut off: where it meets the floor isn't in the picture
               let l = floorHit(pixel: sensorPixel(portrait: [minX, minY], s), s, floorY: floorY),
               let r = floorHit(pixel: sensorPixel(portrait: [maxX, minY], s), s, floorY: floorY),
@@ -212,8 +250,8 @@ extension Detection {
         // Intersect the top-centre ray with the upright front face through the ground hit.
         // This estimates height at the near edge without changing the routing footprint.
         let ray = worldRay(pixel: sensorPixel(portrait: [midX, maxY], s), s)
-        let forward = simd_dot(xz(ray), f)
-        let estimatedHeight = forward > 1e-4 ? s.position.y + ray.y * (dist / forward) - floorY : w
+        let along = simd_dot(xz(ray), f)
+        let estimatedHeight = along > 1e-4 ? s.position.y + ray.y * (dist / along) - floorY : w
         let height = min(max(estimatedHeight.isFinite ? estimatedHeight : w, t.minObjectSize), t.maxObjectDisplayHeight)
         return Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2),
                         yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)), displayY: floorY...(floorY + height))
@@ -252,6 +290,9 @@ struct ObjectTracks {
                 let weight = Float(step / age)
                 tracks[i].o.center += (o.center - tracks[i].o.center) * weight
                 tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) * weight
+                // Rectangular footprints repeat after pi; interpolate along the shorter turn.
+                let angle = 2 * (o.yaw - tracks[i].o.yaw)
+                tracks[i].o.yaw += 0.5 * atan2(sin(angle), cos(angle)) * weight
                 if let old = tracks[i].o.displayY, let new = o.displayY {
                     let bottom = old.lowerBound + (new.lowerBound - old.lowerBound) * weight
                     let top = old.upperBound + (new.upperBound - old.upperBound) * weight
