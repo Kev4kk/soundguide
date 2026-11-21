@@ -84,17 +84,24 @@ These come after testing the route following and the time-to-collision warnings.
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
 
-Later, if needed: detecting unplaced obstacles with an on-device depth-estimation model on the camera feed (battery and accuracy cost), and saving and reloading the room map with `ARWorldMap` (also fixes drift between sessions).
+3. **Detecting unplaced obstacles automatically (on-device models).** No LiDAR needed.
+   - **Pipeline.** Send about 10 of ARKit's 60 frames per second (`ARFrame.capturedImage`) through Vision to a YOLO11n Core ML model (`yolo export format=coreml`). For each box, raycast from its bottom-centre pixel onto the detected floor (`.estimatedPlane`, horizontal) to get the object's floor position. Merge a detection with a known obstacle if it's within about 0.5 m, add it as an obstacle only after 3 or more sightings, and drop it if it goes unseen while in view. Auto obstacles feed the same list the A* planner and collision warnings use.
+   - **Limits.** It only finds the ~80 COCO object types (people, chairs, tables, couches, bikes, plants, bags). Walls come from step 1. Stairs, poles and doors would need a custom-trained model. It sees only the 1× camera's view (ARKit offers no ultra-wide format on the iPhone 17, checked on the device), and positions are off by roughly 10–30 cm.
+   - **Fallback that catches anything: a depth model.** Depth Anything V2 Small (Core ML) estimates distance for every pixel at about 5 per second. Something big and close straight ahead triggers the stop warning, even when YOLO has no name for it.
+   - **Size and speed** (published figures, not yet measured on this phone): YOLO11n is about 5–6 MB and takes a few ms per frame. Depth Anything V2 Small is about 50 MB and takes about 20–35 ms per frame. Both run on the Neural Engine, so they don't compete with ARKit (CPU/GPU), and together use well under a quarter of it at these rates. They add about 55 MB to the app and a few hundred MB of memory (the phone has 8 GB). Don't use the base or large depth models (200 MB or more, too slow).
+   - **Watch.** Heat and battery on walks over 30 minutes; if the phone throttles, run depth only while moving or when YOLO sees nothing ahead. Load both models in the background at launch, since loading takes 1–2 seconds.
+   - **First step.** A test build that times both models on the iPhone 17 before building the pipeline.
+
+Later, if needed: saving and reloading the room map with `ARWorldMap` (also fixes drift between sessions).
 
 
 ## Risks
 - **Front/back confusion.** Generic HRTF without head tracking often puts sounds behind the listener when they're in front. The on-axis tone fixes most of it, and turning the body to scan helps with the rest.
 - **Drift and relocalization.** Room scale is fine, but tracking slips in rooms with blank walls or poor lighting. Without LiDAR this matters more. Put down a rug or a few objects with texture, keep the room well lit, and set up the waypoints in the same lighting the walker will have.
 - **Phone pointing ≠ body facing.** If the walker lets the phone drift sideways, the directions rotate with it. A chest strap is the fix.
-- **Only placed obstacles exist.** Anything nobody placed is invisible to the app. This is a hackathon demo, not a mobility aid, so a cane or a spotter is still required.
+- **Only placed obstacles exist** (until next step 3 is built). Anything nobody placed is invisible to the app. This is a hackathon demo, not a mobility aid, so a cane or a spotter is still required.
 
 ## Skipped (YAGNI)
 - **Soundscape / OSM backend.** It's outdoor and GPS-based, so it doesn't apply at room scale.
-- **Detecting unplaced obstacles automatically.** This needs the LiDAR mesh, which these phones don't have.
 - **Height mapped to pitch** (a higher object pings at a higher note). Generic HRTF gets up and down only roughly. Add this if testing shows people can't tell a shelf target from a floor target.
 - Multi-room maps, sharing layouts between phones, Android or WebXR.
