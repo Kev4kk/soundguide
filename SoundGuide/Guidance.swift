@@ -56,6 +56,16 @@ struct Tuning {
     var unstablePointLifetime: Double = 2  // drop points that never became stable after this long
     var detectInterval: Double = 0.5       // seconds between obstacle map rebuilds
     var removeRadius: Float = 0.5          // Remove picks a detected obstacle this close to the crosshair
+
+    // Object detector (YOLOv3-Tiny via Vision): a box on the floor where each detected object stands.
+    var objectInterval: Double = 0.2       // seconds between detector runs
+    var objectConfidence: Float = 0.5
+    var objectRange: Float = 4             // further boxes land too far off on the floor
+    var minBoxBottom: Float = 0.03         // a box touching the image bottom hides where it meets the floor
+    var minObjectSize: Float = 0.2, maxObjectSize: Float = 2
+    var objectMergeDistance: Float = 0.6   // a box this close to a known object is the same object
+    var minObjectSightings = 3
+    var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
 }
 
 enum Haptic: Equatable {

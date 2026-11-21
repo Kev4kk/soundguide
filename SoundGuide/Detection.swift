@@ -147,3 +147,98 @@ struct PointMap {
         return out
     }
 }
+
+/// One camera image's geometry, kept with the frame so a late detector result still uses the pose it was taken at.
+struct CameraShot {
+    var transform: simd_float4x4
+    var intrinsics: simd_float3x3   // fx = [0][0], fy = [1][1], cx = [2][0], cy = [2][1]
+    var resolution: SIMD2<Float>    // sensor image, landscape
+
+    var position: SIMD3<Float> { SIMD3(transform.columns.3.x, transform.columns.3.y, transform.columns.3.z) }
+}
+
+extension Detection {
+    /// Vision's normalized point on the portrait image (orientation .right, origin bottom-left) → sensor pixel.
+    static func sensorPixel(portrait n: SIMD2<Float>, _ s: CameraShot) -> SIMD2<Float> {
+        SIMD2((1 - n.y) * s.resolution.x, (1 - n.x) * s.resolution.y)
+    }
+
+    static func portraitPoint(sensor p: SIMD2<Float>, _ s: CameraShot) -> SIMD2<Float> {
+        SIMD2(1 - p.y / s.resolution.y, 1 - p.x / s.resolution.x)
+    }
+
+    /// Where the camera ray through a sensor pixel meets the floor; nil at or above the horizon.
+    static func floorHit(pixel p: SIMD2<Float>, _ s: CameraShot, floorY: Float) -> SIMD3<Float>? {
+        let k = s.intrinsics
+        let ray = SIMD3((p.x - k[2][0]) / k[0][0], -(p.y - k[2][1]) / k[1][1], -1)
+        let w = s.transform * SIMD4(ray, 0), d = SIMD3(w.x, w.y, w.z)
+        guard d.y < -1e-4 else { return nil }
+        return s.position + d * ((floorY - s.position.y) / d.y)
+    }
+
+    /// Sensor pixel where a world point appears; nil if it's behind the camera.
+    static func project(_ p: SIMD3<Float>, _ s: CameraShot) -> SIMD2<Float>? {
+        let c = s.transform.inverse * SIMD4(p, 1), k = s.intrinsics
+        guard c.z < -1e-3 else { return nil }
+        return SIMD2(k[0][0] * c.x / -c.z + k[2][0], k[2][1] - k[1][1] * c.y / -c.z)
+    }
+
+    /// A detector box (portrait, normalized) as a floor footprint: its bottom edge is where the object stands.
+    /// ponytail: one camera can't see depth, so the footprint is as deep as it is wide; the point map measures what it can.
+    static func objectFootprint(minX: Float, maxX: Float, minY: Float, _ s: CameraShot, floorY: Float, tuning t: Tuning) -> Obstacle? {
+        guard minY > t.minBoxBottom,   // bottom cut off: where it meets the floor isn't in the picture
+              let l = floorHit(pixel: sensorPixel(portrait: [minX, minY], s), s, floorY: floorY),
+              let r = floorHit(pixel: sensorPixel(portrait: [maxX, minY], s), s, floorY: floorY),
+              let b = floorHit(pixel: sensorPixel(portrait: [(minX + maxX) / 2, minY], s), s, floorY: floorY)
+        else { return nil }
+        let away = xz(b) - xz(s.position), dist = simd_length(away)
+        guard dist > 0.1, dist <= t.objectRange else { return nil }
+        let f = away / dist, w = min(max(simd_distance(xz(l), xz(r)), t.minObjectSize), t.maxObjectSize)
+        let c = xz(b) + f * w / 2
+        return Obstacle(center: SIMD3(c.x, floorY, c.y), halfSize: SIMD2(repeating: w / 2), yaw: Guidance.yaw(of: SIMD3(f.x, 0, f.y)))
+    }
+}
+
+/// Detector boxes merged across frames into world-space objects. Confirmed after a few sightings;
+/// forgotten after several runs in which its spot was in view and nothing was detected there.
+struct ObjectTracks {
+    private struct Track { var o: Obstacle; var seen = 1, misses = 0 }
+    private var tracks: [Track] = []
+    private var ignored: [(center: SIMD2<Float>, radius: Float)] = []
+
+    private func isIgnored(_ p: SIMD2<Float>) -> Bool { ignored.contains { simd_distance($0.center, p) < $0.radius } }
+
+    func obstacles(tuning t: Tuning) -> [Obstacle] { tracks.filter { $0.seen >= t.minObjectSightings }.map(\.o) }
+
+    /// One detector run: `found` are its footprints, `shot` the camera it ran on.
+    mutating func update(_ found: [Obstacle], shot: CameraShot, tuning t: Tuning) {
+        var matched = Set<Int>()
+        for o in found where !isIgnored(xz(o.center)) {
+            let near = tracks.indices.min { simd_distance(tracks[$0].o.center, o.center) < simd_distance(tracks[$1].o.center, o.center) }
+            if let i = near, simd_distance(xz(tracks[i].o.center), xz(o.center)) < t.objectMergeDistance {
+                let n = Float(min(tracks[i].seen + 1, 10))   // running mean, then slow drift
+                tracks[i].o.center += (o.center - tracks[i].o.center) / n
+                tracks[i].o.halfSize += (o.halfSize - tracks[i].o.halfSize) / n
+                tracks[i].seen += 1
+                tracks[i].misses = 0
+                matched.insert(i)
+            } else {
+                tracks.append(Track(o: o))
+                matched.insert(tracks.count - 1)
+            }
+        }
+        // Its spot is well inside the picture and close enough to be found, yet nothing was: a miss.
+        for i in tracks.indices where !matched.contains(i) {
+            guard simd_distance(xz(tracks[i].o.center), xz(shot.position)) < t.objectRange,
+                  let px = Detection.project(tracks[i].o.center, shot) else { continue }
+            let n = Detection.portraitPoint(sensor: px, shot)
+            if n.x > 0.1, n.x < 0.9, n.y > 0.1, n.y < 0.9 { tracks[i].misses += 1 }
+        }
+        tracks.removeAll { $0.misses >= t.objectForgetMisses }
+    }
+
+    mutating func ignore(around c: SIMD2<Float>, radius: Float) {
+        ignored.append((c, radius))
+        tracks.removeAll { simd_distance(xz($0.o.center), c) < radius }
+    }
+}

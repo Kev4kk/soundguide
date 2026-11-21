@@ -193,4 +193,85 @@ final class DetectionTests: XCTestCase {
         _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0.3, waypoints: wps, obstacles: [box], tuning: t)
         XCTAssertEqual(nav.replans, 2)
     }
+
+    // MARK: Object detector geometry
+
+    /// Portrait phone at 1.4 m facing -z, pitched down by `pitch` radians; sensor 1920×1440.
+    func shot(pitch: Float = -.pi / 4, yaw: Float = 0) -> CameraShot {
+        let q = simd_quatf(angle: yaw, axis: [0, 1, 0]) * simd_quatf(angle: pitch, axis: [1, 0, 0])
+        // Held portrait, the sensor's x points down and its y to the right.
+        let x = q.act([0, -1, 0]), y = q.act([1, 0, 0]), z = q.act([0, 0, 1])
+        return CameraShot(transform: simd_float4x4(SIMD4(x, 0), SIMD4(y, 0), SIMD4(z, 0), [0, 1.4, 0, 1]),
+                          intrinsics: simd_float3x3([1500, 0, 0], [0, 1500, 0], [960, 720, 1]),
+                          resolution: [1920, 1440])
+    }
+
+    func hit(_ n: SIMD2<Float>, _ s: CameraShot) -> SIMD3<Float>? {
+        Detection.floorHit(pixel: Detection.sensorPixel(portrait: n, s), s, floorY: 0)
+    }
+
+    func testFloorHitFromPortraitImagePoints() {
+        let s = shot()
+        let c = hit([0.5, 0.5], s)!
+        XCTAssertEqual(c.x, 0, accuracy: 1e-4); XCTAssertEqual(c.y, 0, accuracy: 1e-4); XCTAssertEqual(c.z, -1.4, accuracy: 1e-3)
+        let low = hit([0.5, 0.3], s)!                      // lower on screen = nearer floor
+        XCTAssertEqual(low.x, 0, accuracy: 1e-4); XCTAssertGreaterThan(low.z, -1.4)
+        XCTAssertGreaterThan(hit([0.7, 0.5], s)!.x, 0.1)   // right of screen = world right
+        XCTAssertNil(hit([0.5, 0.6], shot(pitch: 0)))      // level camera: upper half never meets the floor
+    }
+
+    func testProjectInvertsFloorHit() {
+        let s = shot(), n = SIMD2<Float>(0.3, 0.2)
+        let px = Detection.project(hit(n, s)!, s)!
+        let back = Detection.portraitPoint(sensor: px, s)
+        XCTAssertEqual(back.x, n.x, accuracy: 1e-4); XCTAssertEqual(back.y, n.y, accuracy: 1e-4)
+        XCTAssertNil(Detection.project([0, 0, 2], s))       // behind the camera
+    }
+
+    func testObjectFootprintStandsOnBoxBottom() {
+        let s = shot()
+        let o = Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.5, s, floorY: 0, tuning: t)!
+        XCTAssertEqual(o.center.x, 0, accuracy: 1e-4)
+        XCTAssertEqual(o.distance(to: [0, -1.4]), 0, accuracy: 1e-3)    // bottom-centre is its near edge
+        XCTAssertLessThan(o.center.z, -1.4)                              // and it extends away from the camera
+        XCTAssertGreaterThan(o.halfSize.x, t.minObjectSize / 2 - 1e-5)
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.01, s, floorY: 0, tuning: t))  // bottom cut off
+        XCTAssertNil(Detection.objectFootprint(minX: 0.4, maxX: 0.6, minY: 0.98, shot(pitch: -0.15), floorY: 0, tuning: t))  // near the horizon: too far or never meets the floor
+    }
+
+    // MARK: Object tracks
+
+    func testTracksConfirmAfterSightingsAndMerge() {
+        var tr = ObjectTracks()
+        let s = shot(), box = Obstacle(center: [0, 0, -1.6], halfSize: [0.2, 0.2])
+        var moved = box; moved.center.x += 0.1
+        tr.update([box], shot: s, tuning: t)
+        tr.update([moved], shot: s, tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+        tr.update([box, Obstacle(center: [2, 0, -1.6], halfSize: [0.2, 0.2])], shot: s, tuning: t)
+        let obs = tr.obstacles(tuning: t)
+        XCTAssertEqual(obs.count, 1)
+        XCTAssertEqual(obs[0].center.x, 0.1 / 3, accuracy: 1e-4)
+    }
+
+    func testTrackForgottenOnlyWhenItsSpotIsInViewAndEmpty() {
+        var tr = ObjectTracks()
+        let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        for _ in 0..<t.objectForgetMisses { tr.update([], shot: shot(yaw: .pi), tuning: t) }   // looking away
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        for _ in 0..<(t.objectForgetMisses - 1) { tr.update([], shot: shot(), tuning: t) }
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        tr.update([], shot: shot(), tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
+
+    func testRemovedTrackStaysRemoved() {
+        var tr = ObjectTracks()
+        let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        tr.ignore(around: [0, -1.4], radius: 0.5)
+        for _ in 0..<3 { tr.update([box], shot: shot(), tuning: t) }
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
 }

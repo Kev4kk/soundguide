@@ -2,6 +2,8 @@ import ARKit
 import RealityKit
 import SwiftUI
 import UIKit
+import CoreML
+import Vision
 
 enum ObjectKind { case waypoint, obstacle }
 
@@ -13,8 +15,9 @@ struct Placed {
 }
 
 struct Detected: Equatable {
+    enum Source: Equatable { case plane(UUID), points, object }
     let obstacle: Obstacle
-    let plane: UUID?   // nil = from the feature-point map
+    let source: Source
 }
 
 final class ARController: NSObject, ObservableObject, ARSessionDelegate {
@@ -47,6 +50,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var pointMap = PointMap()
     private var ignoredPlanes = Set<UUID>()
     private var lastBuild: TimeInterval = 0
+    private var floorY: Float?
+    // Object detector: runs off the main thread, one image at a time.
+    private let visionQueue = DispatchQueue(label: "detector", qos: .userInitiated)
+    private var detector: VNCoreMLModel?
+    private var detectorBusy = false
+    private var lastDetectorRun: TimeInterval = 0
+    private var tracks = ObjectTracks()
     private var detectedEntities: [AnchorEntity] = []
 
     var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
@@ -66,6 +76,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         arView.addSubview(coaching)
         if tuning.useHeadTracking { head.start() }
+        visionQueue.async {   // loading takes a second or two
+            let model = try? VNCoreMLModel(for: YOLOv3Tiny(configuration: MLModelConfiguration()).model)
+            DispatchQueue.main.async { self.detector = model }
+        }
     }
 
     // MARK: Setup
@@ -177,6 +191,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             pointMap.add(pc.points, ids: pc.identifiers, camera: SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z),
                          now: frame.timestamp, tuning: tuning)
         }
+        runDetector(frame)
         guard frame.timestamp - lastBuild >= tuning.detectInterval else { return }
         lastBuild = frame.timestamp
 
@@ -187,24 +202,56 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         }
         let floors = ground.filter { if case .floor = $0.classification { return true }; return false }
         guard let floorY = (floors.isEmpty ? ground : floors).map({ Self.corners($0)[0].y }).min() else { return }
+        self.floorY = floorY
 
         let planeBoxes = planes.compactMap { a -> Detected? in
             guard !ignoredPlanes.contains(a.identifier) else { return nil }
             return Detection.planeObstacle(corners: Self.corners(a), vertical: a.alignment == .vertical,
-                                           floorY: floorY, tuning: tuning).map { Detected(obstacle: $0, plane: a.identifier) }
+                                           floorY: floorY, tuning: tuning).map { Detected(obstacle: $0, source: .plane(a.identifier)) }
         }
         // Points on a table top would only duplicate the table.
         let pointBoxes = pointMap.build(floorY: floorY, now: frame.timestamp, tuning: tuning)
             .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
-            .map { Detected(obstacle: $0, plane: nil) }
-        setDetected(planeBoxes + pointBoxes)
+            .map { Detected(obstacle: $0, source: .points) }
+        let objectBoxes = tracks.obstacles(tuning: tuning).map { Detected(obstacle: $0, source: .object) }
+        setDetected(planeBoxes + pointBoxes + objectBoxes)
+    }
+
+    /// YOLO boxes → floor footprints, using the pose the image was taken at. Labels are ignored, except people:
+    /// ponytail: people move, so they never enter the map; time-to-collision on live boxes if walkers need them.
+    private func runDetector(_ frame: ARFrame) {
+        guard let model = detector, let floorY, !detectorBusy,
+              frame.timestamp - lastDetectorRun >= tuning.objectInterval else { return }
+        detectorBusy = true
+        lastDetectorRun = frame.timestamp
+        let cam = frame.camera, image = frame.capturedImage, t = tuning
+        let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
+                              resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
+        visionQueue.async { [weak self] in
+            let request = VNCoreMLRequest(model: model)
+            request.imageCropAndScaleOption = .scaleFill   // whole field of view; boxes map back to the full image
+            try? VNImageRequestHandler(cvPixelBuffer: image, orientation: .right).perform([request])
+            let found = (request.results as? [VNRecognizedObjectObservation] ?? [])
+                .filter { $0.confidence >= t.objectConfidence && $0.labels.first?.identifier != "person" }
+                .compactMap { o in
+                    Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
+                                              minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
+                }
+            DispatchQueue.main.async {
+                guard let self else { return }
+                self.detectorBusy = false
+                if self.autoDetect { self.tracks.update(found, shot: shot, tuning: t) }
+            }
+        }
     }
 
     private func setDetected(_ d: [Detected]) {
         guard d != detected else { return }
         detected = d
         detectedEntities.forEach { arView.scene.removeAnchor($0) }
-        detectedEntities = d.map { Self.box($0.obstacle, color: .systemOrange.withAlphaComponent(0.5)) }
+        detectedEntities = d.map {   // orange = planes and points, yellow = object detector
+            Self.box($0.obstacle, color: ($0.source == .object ? UIColor.systemYellow : .systemOrange).withAlphaComponent(0.5))
+        }
         detectedEntities.forEach { arView.scene.addAnchor($0) }
     }
 
@@ -216,8 +263,12 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         guard let d = detected.min(by: { $0.obstacle.distance(to: p) < $1.obstacle.distance(to: p) }),
               d.obstacle.distance(to: p) < tuning.removeRadius
         else { status = "No detected obstacle under the crosshair"; return }
-        if let id = d.plane { ignoredPlanes.insert(id) }
-        else { pointMap.ignore(around: xz(d.obstacle.center), radius: d.obstacle.boundingRadius + tuning.detectCell) }
+        let r = d.obstacle.boundingRadius + tuning.detectCell
+        switch d.source {
+        case .plane(let id): ignoredPlanes.insert(id)
+        case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
+        case .object: tracks.ignore(around: xz(d.obstacle.center), radius: r)
+        }
         setDetected(detected.filter { $0 != d })
         status = "Removed detected obstacle"
         tap.impactOccurred()

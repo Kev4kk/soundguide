@@ -85,7 +85,7 @@ These come after testing the route following and the time-to-collision warnings.
    - About 1.5 m before a sharp bend in the planned route, say "Turn left soon".
    - Walking more than 60° off the route for over 2 seconds triggers a short "Turn around" or left/right cue.
 
-3. **Detecting unplaced obstacles automatically (on-device models).** *(Phase 2 of "Automatic obstacle detection": only if planes + feature points miss plain objects on the device.)* No LiDAR needed.
+3. **Detecting unplaced obstacles automatically (on-device models).** *(The YOLO part is built as YOLOv3-Tiny; see "Object detector". Depth is still open.)* No LiDAR needed.
    - **Pipeline.** Send about 10 of ARKit's 60 frames per second (`ARFrame.capturedImage`) through Vision to a YOLO11n Core ML model (`yolo export format=coreml`). For each box, raycast from its bottom-centre pixel onto the detected floor (`.estimatedPlane`, horizontal) to get the object's floor position. Merge a detection with a known obstacle if it's within about 0.5 m, add it as an obstacle only after 3 or more sightings, and drop it if it goes unseen while in view. Auto obstacles feed the same list the A* planner and collision warnings use.
    - **Limits.** It only finds the ~80 COCO object types (people, chairs, tables, couches, bikes, plants, bags). Walls come from step 1. Stairs, poles and doors would need a custom-trained model. It sees only the 1× camera's view (ARKit offers no ultra-wide format on the iPhone 17, checked on the device), and positions are off by roughly 10–30 cm.
    - **Fallback that catches anything: a depth model.** Depth Anything V2 Small (Core ML) estimates distance for every pixel at about 5 per second. Something big and close straight ahead triggers the stop warning, even when YOLO has no name for it.
@@ -120,7 +120,7 @@ Goal: obstacles appear without the helper placing them, live in world coordinate
 | **Depth Anything V2 Small** | Anything, including blank surfaces | Relative depth only: it needs scaling against feature points to place anything in the world | 20–35 ms per frame on the Neural Engine | ~50 MB | Everything |
 
 ### Decision: planes + feature-point map, no ML in this pass
-Both are already in world space, cost nearly nothing, need no model or license, and their pure logic can be unit-tested. Together they cover walls, tables and most furniture. YOLO stays as phase 2, only if device testing shows plain, untextured objects are being missed. Depth is shelved: it's 50 MB, and it needs metric scaling that a feature-point map already provides more cheaply.
+Both are already in world space, cost nearly nothing, need no model or license, and their pure logic can be unit-tested. Together they cover walls, tables and most furniture. The object detector was added after the first device test (see below). Depth is shelved: it's 50 MB, and it needs metric scaling that a feature-point map already provides more cheaply.
 
 ### Design
 - **Floor height**: the lowest horizontal plane classified `.floor`, or failing that the lowest non-ceiling horizontal plane. Nothing is detected until a floor exists.
@@ -141,10 +141,20 @@ Both are already in world space, cost nearly nothing, need no model or license, 
 
 Decided with the user: planes and points only (no ML yet); auto-forget once seen empty; keep detecting during guiding; separate bundle ID.
 
+### Object detector (added after the first device test, at the user's request)
+The flow follows [devcelio/object-detection](https://github.com/devcelio/object-detection): camera frame → Vision `VNCoreMLRequest` → Core ML. That repo uses ResNet50, a *classifier*, which gives one label per image and no location. Here it's **Apple's YOLOv3-Tiny** detector instead (`YOLOv3Tiny.mlmodel`, 8.9 MB Int8, darknet license, non-max suppression built in), and the label is thrown away. Each box becomes a world-space box:
+- **Where it runs.** On a background queue, one image at a time, every 0.2 s. It reads `frame.capturedImage` in orientation `.right` with `.scaleFill`, so the model sees the whole portrait view.
+- **Box → floor.** The box's bottom-left, bottom-centre and bottom-right are mapped back to sensor pixels and cast through the camera intrinsics and the pose *the image was taken at* onto the floor plane. Its width is measured there, and its depth is assumed equal to its width (one camera can't see depth). Boxes cut off at the image bottom, or more than 4 m away, are skipped. **People are skipped** because they move.
+- **Tracks** (`ObjectTracks`, pure). A box within 0.6 m of a known object updates it with a running mean. An object counts after 3 sightings. It's forgotten after 8 runs where its spot was well inside the picture, within range, and nothing was detected there. Looking away never forgets it. Remove suppresses the spot.
+- **Colour.** Detector boxes are **yellow**; plane and point boxes stay orange.
+- **Ceiling.** Wall-mounted objects (a TV, a clock) get placed on the floor behind the wall, because their box bottom isn't where they touch the floor.
+
 ### Tests (Simulator, pure logic)
 - **Planes**: a diagonal wall becomes a thin rotated box; table height counts, floor and shelf heights don't; a high cabinet is ignored.
 - **Point map**: stable points form a box; points seen once don't; floor-level points and lone points don't; two separate objects give two boxes; a diagonal line of points gives a thin box; an L shape leaves its inside corner free; a refined point moves; a removed area stays removed; far points are ignored; seeing through a point forgets it, but not if it's re-sighted or the ray passes above it.
 - **Navigator**: replans when the obstacle list changes.
+- **Detector geometry**: the image centre hits the floor straight ahead at the right distance; lower on screen is nearer, right of screen is to the right; projection inverts the floor hit; a footprint's near edge is the box bottom; cut-off and near-horizon boxes are rejected.
+- **Tracks**: confirmed after 3 sightings and merged with a mean; forgotten only when the spot is in view and empty, never when looking away; a removed spot stays removed.
 
 ### Device checks (need someone holding the phone)
 How quickly a chair, a bag and a plain box show up on a sweep. Whether walls are found. Rug or floor false positives. People walking through. Rebuild time with a large map.
