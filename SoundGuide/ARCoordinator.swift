@@ -53,6 +53,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     @Published private(set) var guiding = false
     @Published private(set) var status = ""
     @Published private(set) var trackingNormal = false
+    @Published private(set) var cameraStatus = "Starting object detection…"
+    private var cameraCueTiming = CameraCueTiming()
     @Published private(set) var usingHeadTracking = false
     @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
@@ -64,6 +66,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         didSet {
             guard autoDetect != oldValue else { return }
             detectorGeneration &+= 1
+            cameraCueTiming = CameraCueTiming()
+            cameraStatus = autoDetect ? "Starting object detection…" : "Object detection off"
             if !autoDetect {
                 navigationObstacles = []
                 setDetected([])
@@ -122,6 +126,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 DispatchQueue.main.async { self?.detector = detector }
             } catch {
                 Self.detectorLog.error("Could not load YOLO26: \(error.localizedDescription)")
+                DispatchQueue.main.async {
+                    self?.cameraStatus = "Object detection unavailable"
+                    self?.audio.say("Object detection unavailable")
+                }
             }
         }
     }
@@ -235,7 +243,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             pointMap.add(pc.points, ids: pc.identifiers, camera: SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z),
                          now: frame.timestamp, tuning: tuning)
         }
-        runDetector(frame)
         guard frame.timestamp - lastBuild >= tuning.detectInterval else { return }
         lastBuild = frame.timestamp
 
@@ -269,7 +276,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     /// Match same-class footprints using the image's own pose. People mask visibility but never enter the persistent map.
     private func runDetector(_ frame: ARFrame) {
-        guard let model = detector, let floorY, !detectorBusy else { return }
+        guard let model = detector, !detectorBusy else { return }
+        let mappingFloor = trackingNormal ? floorY : nil
         let thermal = ProcessInfo.processInfo.thermalState
         if thermal == .serious || thermal == .critical {
             guard frame.timestamp - lastDetectorRun >= tuning.hotObjectInterval else { return }
@@ -285,10 +293,15 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         visionQueue.async { [weak self] in
             let found: [ObjectObservation]?
             var masks: [CGRect] = []
+            let cameraMessage: String?
             do {
                 let boxes = try model.detect(in: image, orientation: .right)
-                masks = boxes.filter { ($0.labels.first?.confidence ?? 0) >= t.objectConfidence }.map(\.boundingBox)
-                found = boxes.compactMap { o in
+                let confident = boxes.filter { ($0.labels.first?.confidence ?? 0) >= t.objectConfidence }
+                let objects = confident.compactMap { o in o.labels.first.map { CameraObject(label: $0.identifier, bounds: o.boundingBox) } }
+                cameraMessage = CameraObject.primary(objects)?.announcement
+                masks = confident.map(\.boundingBox)
+                found = confident.compactMap { o in
+                    guard let floorY = mappingFloor else { return nil }
                     guard let label = o.labels.first, label.confidence >= t.objectConfidence,
                           label.identifier != "person" else { return nil }
                     guard let fit = Detection.fitObject(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
@@ -298,9 +311,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 }
             } catch {
                 Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")
+                cameraMessage = nil
                 found = nil   // A failed request is not evidence that the room is empty.
             }
-            let updated = found.map { observations in
+            let updated = mappingFloor == nil ? nil : found.map { observations in
                 var next = previousTracks
                 next.update(observations, shot: shot, now: timestamp, tuning: t, features: features, masks: masks)
                 return next
@@ -308,7 +322,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.detectorBusy = false
-                guard let updated, self.autoDetect, self.trackingNormal, self.detectorGeneration == generation else { return }
+                guard self.autoDetect, self.detectorGeneration == generation else { return }
+                let liveStatus = found == nil ? "Object detection unavailable" : cameraMessage ?? "Scanning for objects"
+                if self.cameraStatus != liveStatus { self.cameraStatus = liveStatus }
+                // Never interrupt waypoint directions, tracking-loss alerts, or collision audio.
+                if !self.guiding, let cue = cameraMessage ?? (found == nil ? liveStatus : nil),
+                   self.cameraCueTiming.shouldSpeak(cue, now: timestamp) { self.audio.say(cue) }
+                guard let updated, self.trackingNormal else { return }
                 self.tracks = updated
                 self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
             }
@@ -451,7 +471,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         if ready != headphonesReady { headphonesReady = ready }
         if denied != motionAccessDenied { motionAccessDenied = denied }
         if drag != nil { updateDragPreview() }
-        if autoDetect && normal { detect(frame) }
+        if autoDetect {
+            if normal { detect(frame) } // Metric mapping still requires a trustworthy pose.
+            runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
+        }
         guard guiding else { return }
 
         // Never guide from a stale pose.

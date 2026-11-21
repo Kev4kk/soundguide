@@ -14,12 +14,11 @@ struct ContentView: View {
 
     private var setupOverlay: some View {
         VStack {
-            Text(ar.trackingNormal
-                 ? (ar.status.isEmpty ? "Aim the + at the floor or a surface" : ar.status)
-                 : "Getting AR ready…")
+            Text(ar.cameraStatus)
                 .font(.headline).padding(10)
                 .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 10))
                 .padding(.top)
+            if !ar.status.isEmpty { Text(ar.status).font(.subheadline).padding(4).background(.thinMaterial) }
             headphoneStatus
             Spacer()
             Image(systemName: "plus").font(.system(size: 36, weight: .light))

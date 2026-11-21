@@ -264,6 +264,36 @@ extension Detection {
     }
 }
 
+/// Camera-relative observations, never a distance estimate or an all-clear.
+struct CameraObject {
+    let label: String
+    let bounds: CGRect // Vision's normalized, upright portrait image
+
+    var announcement: String {
+        let direction = bounds.midX < 0.33 ? "left" : bounds.midX > 0.67 ? "right" : "center"
+        return "\(label.capitalized), \(direction)"
+    }
+
+    static func primary(_ objects: [CameraObject]) -> CameraObject? {
+        // Favor prominent objects in front of the camera. Area is not metric depth.
+        func score(_ o: CameraObject) -> CGFloat {
+            o.bounds.width * o.bounds.height / (1 + 2 * abs(o.bounds.midX - 0.5))
+        }
+        return objects.max { score($0) < score($1) }
+    }
+}
+
+struct CameraCueTiming {
+    private var last: String?
+    private var lastTime = -Double.infinity
+
+    mutating func shouldSpeak(_ text: String, now: Double) -> Bool {
+        guard now - lastTime >= (text == last ? 6 : 1.5) else { return false }
+        last = text; lastTime = now
+        return true
+    }
+}
+
 struct ObjectObservation {
     let obstacle: Obstacle
     let label: String

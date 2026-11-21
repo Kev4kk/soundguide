@@ -304,6 +304,18 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(visible.last, all[1968])
     }
 
+    func testCameraCuesNeedNoFloorAndIncludePeople() {
+        let person = CameraObject(label: "person", bounds: CGRect(x: 0.05, y: 0.1, width: 0.4, height: 0.7))
+        let chair = CameraObject(label: "chair", bounds: CGRect(x: 0.7, y: 0.2, width: 0.1, height: 0.1))
+        XCTAssertEqual(CameraObject.primary([person, chair])?.announcement, "Person, left")
+        XCTAssertEqual(CameraObject.primary([chair])?.announcement, "Chair, right")
+        XCTAssertNil(CameraObject.primary([])) // No all-clear conclusion from a blank image.
+        var timing = CameraCueTiming()
+        XCTAssertTrue(timing.shouldSpeak("Person, left", now: 0))
+        XCTAssertFalse(timing.shouldSpeak("Person, left", now: 1))
+        XCTAssertTrue(timing.shouldSpeak("Chair, right", now: 2))
+    }
+
     // MARK: Object tracks
 
     func testTracksConfirmAfterSightingsAndMerge() {
