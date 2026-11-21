@@ -62,7 +62,7 @@ struct Tuning {
     var detectInterval: Double = 0.5       // seconds between obstacle map rebuilds
     var removeRadius: Float = 0.5          // Remove picks a detected obstacle this close to the crosshair
 
-    // Object detector (YOLOv3-Tiny via Vision): a box on the floor where each detected object stands.
+    // Object detector (YOLO26n via Vision): a box on the floor where each detected object stands.
     var objectInterval: Double = 0.2       // seconds between detector runs
     var objectConfidence: Float = 0.5
     var objectRange: Float = 4             // further boxes land too far off on the floor

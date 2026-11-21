@@ -5,8 +5,10 @@ An iPhone app that guides someone through a room with 3D sound. A sighted helper
 ## Run
 1. Open `SoundGuide.xcodeproj`, or regenerate it with `xcodegen generate` from `project.yml`.
 2. Set your signing team. Choose an iPhone as the target and press Run. ARKit doesn't run in the Simulator.
-3. Run the unit tests (guidance logic only) with `xcodebuild test -scheme SoundGuide -destination 'platform=iOS Simulator,name=iPhone 17e'`.
+3. Run the tests (guidance logic and Core ML/Vision integration) with `xcodebuild test -scheme SoundGuide -destination 'platform=iOS Simulator,name=iPhone 17 Pro'` (substitute an installed simulator if needed).
 
 All the guidance numbers, such as radii, ping speeds and the elevation cap, live in the `Tuning` struct in `SoundGuide/Guidance.swift`. The design is described in [PLAN.md](PLAN.md).
 
-This is a hackathon demo, not a mobility aid. It only knows about the obstacles you place.
+Automatic obstacles use ARKit planes and feature points plus on-device YOLO26n. See the [model license and export notes](LICENSES/YOLO26n.md).
+
+This is a hackathon demo, not a mobility aid. Automatic detection can miss obstacles. Don't rely on it for navigation safety.

@@ -4,6 +4,30 @@ import SwiftUI
 import UIKit
 import CoreML
 import Vision
+import os
+
+/// Construct and use exclusively on the serial Vision queue.
+final class YOLO26Detector {
+    private let request: VNCoreMLRequest
+
+    enum InferenceError: Error { case unexpectedResults }
+
+    init(configuration: MLModelConfiguration = MLModelConfiguration()) throws {
+        let model = try VNCoreMLModel(for: YOLO26n(configuration: configuration).model)
+        request = VNCoreMLRequest(model: model)
+        // The model's portrait input approximates the camera aspect ratio. Preserve the
+        // whole image so normalized Vision coordinates map directly back to the sensor.
+        request.imageCropAndScaleOption = .scaleFill
+    }
+
+    func detect(in image: CVPixelBuffer, orientation: CGImagePropertyOrientation) throws -> [VNRecognizedObjectObservation] {
+        try VNImageRequestHandler(cvPixelBuffer: image, orientation: orientation).perform([request])
+        guard let objects = request.results as? [VNRecognizedObjectObservation] else {
+            throw InferenceError.unexpectedResults
+        }
+        return objects
+    }
+}
 
 enum ObjectKind { case waypoint, obstacle }
 
@@ -35,7 +59,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     // Beacon pings and spoken directions only play while this is on. Safety sounds always play.
     @Published private(set) var guideAudioOn = false
     private var lastMapUpdate: TimeInterval = 0
-    @Published var autoDetect = true { didSet { if !autoDetect { setDetected([]) } } }
+    @Published var autoDetect = true {
+        didSet {
+            guard autoDetect != oldValue else { return }
+            detectorGeneration &+= 1
+            if !autoDetect { setDetected([]) }
+        }
+    }
     @Published private(set) var detected: [Detected] = []
 
     private let audio = SpatialAudio()
@@ -56,8 +86,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var lastBuild: TimeInterval = 0
     private var floorY: Float?
     // Object detector: runs off the main thread, one image at a time.
+    private static let detectorLog = Logger(subsystem: Bundle.main.bundleIdentifier ?? "SoundGuide", category: "YOLO26")
     private let visionQueue = DispatchQueue(label: "detector", qos: .userInitiated)
-    private var detector: VNCoreMLModel?
+    private var detector: YOLO26Detector?
+    private var detectorGeneration = 0
     private var detectorBusy = false
     private var lastDetectorRun: TimeInterval = 0
     private var tracks = ObjectTracks()
@@ -80,9 +112,13 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         coaching.autoresizingMask = [.flexibleWidth, .flexibleHeight]
         arView.addSubview(coaching)
         if tuning.useHeadTracking { head.start() }
-        visionQueue.async {   // loading takes a second or two
-            let model = try? VNCoreMLModel(for: YOLOv3Tiny(configuration: MLModelConfiguration()).model)
-            DispatchQueue.main.async { self.detector = model }
+        visionQueue.async { [weak self] in
+            do {
+                let detector = try YOLO26Detector()
+                DispatchQueue.main.async { self?.detector = detector }
+            } catch {
+                Self.detectorLog.error("Could not load YOLO26: \(error.localizedDescription)")
+            }
         }
     }
 
@@ -229,22 +265,27 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         detectorBusy = true
         lastDetectorRun = frame.timestamp
         let cam = frame.camera, image = frame.capturedImage, t = tuning
+        let generation = detectorGeneration
         let shot = CameraShot(transform: cam.transform, intrinsics: cam.intrinsics,
                               resolution: SIMD2(Float(cam.imageResolution.width), Float(cam.imageResolution.height)))
         visionQueue.async { [weak self] in
-            let request = VNCoreMLRequest(model: model)
-            request.imageCropAndScaleOption = .scaleFill   // whole field of view; boxes map back to the full image
-            try? VNImageRequestHandler(cvPixelBuffer: image, orientation: .right).perform([request])
-            let found = (request.results as? [VNRecognizedObjectObservation] ?? [])
-                .filter { $0.confidence >= t.objectConfidence && $0.labels.first?.identifier != "person" }
-                .compactMap { o in
-                    Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
-                                              minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
+            let found: [Obstacle]?
+            do {
+                found = try model.detect(in: image, orientation: .right).compactMap { o in
+                    guard let label = o.labels.first, label.confidence >= t.objectConfidence,
+                          label.identifier != "person" else { return nil }
+                    return Detection.objectFootprint(minX: Float(o.boundingBox.minX), maxX: Float(o.boundingBox.maxX),
+                                                     minY: Float(o.boundingBox.minY), shot, floorY: floorY, tuning: t)
                 }
+            } catch {
+                Self.detectorLog.error("YOLO26 inference failed: \(error.localizedDescription)")
+                found = nil   // A failed request is not evidence that the room is empty.
+            }
             DispatchQueue.main.async {
                 guard let self else { return }
                 self.detectorBusy = false
-                if self.autoDetect { self.tracks.update(found, shot: shot, tuning: t) }
+                guard let found, self.autoDetect, self.trackingNormal, self.detectorGeneration == generation else { return }
+                self.tracks.update(found, shot: shot, tuning: t)
             }
         }
     }
@@ -322,7 +363,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     func session(_ session: ARSession, didUpdate frame: ARFrame) {
         let normal: Bool
         if case .normal = frame.camera.trackingState { normal = true } else { normal = false }
-        if normal != trackingNormal { trackingNormal = normal }
+        if normal != trackingNormal {
+            if !normal { detectorGeneration &+= 1 }
+            trackingNormal = normal
+        }
         let ready = head.isLive, denied = head.accessDenied
         if ready != headphonesReady { headphonesReady = ready }
         if denied != motionAccessDenied { motionAccessDenied = denied }

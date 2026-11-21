@@ -1,4 +1,6 @@
 import XCTest
+import CoreML
+import CoreVideo
 import simd
 @testable import SoundGuide
 
@@ -192,6 +194,21 @@ final class DetectionTests: XCTestCase {
         XCTAssertTrue(nav.path!.allSatisfy { box.distance(to: $0) > 0.2 })
         _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0.3, waypoints: wps, obstacles: [box], tuning: t)
         XCTAssertEqual(nav.replans, 2)
+    }
+
+    // MARK: Model integration
+
+    func testYOLO26SupportsEmptyVisionResults() throws {
+        let config = MLModelConfiguration()
+        config.computeUnits = .cpuOnly
+        let detector = try YOLO26Detector(configuration: config)
+        var buffer: CVPixelBuffer?
+        XCTAssertEqual(CVPixelBufferCreate(nil, 640, 480, kCVPixelFormatType_32BGRA, nil, &buffer), kCVReturnSuccess)
+        let image = try XCTUnwrap(buffer)
+        CVPixelBufferLockBaseAddress(image, [])
+        memset(CVPixelBufferGetBaseAddress(image), 0, CVPixelBufferGetDataSize(image))
+        CVPixelBufferUnlockBaseAddress(image, [])
+        XCTAssertTrue(try detector.detect(in: image, orientation: .right).isEmpty)
     }
 
     // MARK: Object detector geometry

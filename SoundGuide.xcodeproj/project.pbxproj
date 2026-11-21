@@ -7,7 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		31A7248E49428F0EEEBAAB9C /* YOLOv3Tiny.mlmodel in Sources */ = {isa = PBXBuildFile; fileRef = 35ADE8D355863BDF6DBD8CD2 /* YOLOv3Tiny.mlmodel */; };
+		31A7248E49428F0EEEBAAB9C /* YOLO26n.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = 35ADE8D355863BDF6DBD8CD2 /* YOLO26n.mlpackage */; };
 		377AF2AE23FA0018848830F2 /* GuidanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */; };
 		45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */; };
 		73F7C6D38A0FEA94ACDAC412 /* DetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF6FB714CDEBF64393A2B3C1 /* DetectionTests.swift */; };
@@ -35,7 +35,7 @@
 		05FC900B1A040F27B9D5DFFE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
 		14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialAudio.swift; sourceTree = "<group>"; };
 		2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideMapView.swift; sourceTree = "<group>"; };
-		35ADE8D355863BDF6DBD8CD2 /* YOLOv3Tiny.mlmodel */ = {isa = PBXFileReference; lastKnownFileType = file.mlmodel; path = YOLOv3Tiny.mlmodel; sourceTree = "<group>"; };
+		35ADE8D355863BDF6DBD8CD2 /* YOLO26n.mlpackage */ = {isa = PBXFileReference; lastKnownFileType = folder.mlpackage; path = YOLO26n.mlpackage; sourceTree = "<group>"; };
 		418FA0E1AAA825730B274295 /* SoundGuideApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGuideApp.swift; sourceTree = "<group>"; };
 		45C29884A245E36004313953 /* SoundGuide.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SoundGuide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Guidance.swift; sourceTree = "<group>"; };
@@ -90,7 +90,7 @@
 				A69F4C99C93D21040FD12441 /* PathPlanner.swift */,
 				418FA0E1AAA825730B274295 /* SoundGuideApp.swift */,
 				14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */,
-				35ADE8D355863BDF6DBD8CD2 /* YOLOv3Tiny.mlmodel */,
+				35ADE8D355863BDF6DBD8CD2 /* YOLO26n.mlpackage */,
 			);
 			path = SoundGuide;
 			sourceTree = "<group>";
@@ -195,7 +195,7 @@
 				FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */,
 				83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */,
 				45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */,
-				31A7248E49428F0EEEBAAB9C /* YOLOv3Tiny.mlmodel in Sources */,
+				31A7248E49428F0EEEBAAB9C /* YOLO26n.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
