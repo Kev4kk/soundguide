@@ -352,7 +352,8 @@ struct ObjectTracks {
         var lastSeen: Double
         var lastMeasured = -Double.infinity
         var lastMiss = -Double.infinity
-        var seen = 1, misses = 0
+        var score: Float
+        var confirmed = false   // sticky: a confirmed object stays shown until its score runs out
     }
     private var tracks: [Track] = []
     private var nextID = 0
@@ -365,11 +366,32 @@ struct ObjectTracks {
     }
 
     func confirmed(tuning t: Tuning) -> [(id: Int, label: String, obstacle: Obstacle)] {
-        let minimumSpan = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
-        return tracks.compactMap { $0.seen >= t.minObjectSightings && $0.lastSeen - $0.firstSeen + 1e-6 >= minimumSpan ? ($0.id, $0.label, $0.o) : nil }
+        tracks.compactMap { $0.confirmed ? ($0.id, $0.label, $0.o) : nil }
     }
 
-    private func imageBounds(_ o: Obstacle, _ shot: CameraShot) -> CGRect {
+    private static func cap(_ label: String, _ t: Tuning) -> Float { t.objectMaxScoreByLabel[label] ?? t.objectMaxScore }
+
+    private mutating func hit(_ i: Int, now: Double, tuning t: Tuning) {
+        tracks[i].score = min(tracks[i].score + t.objectHit, Self.cap(tracks[i].label, t))
+        let span = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
+        if tracks[i].score >= t.objectConfirmScore, now - tracks[i].firstSeen + 1e-6 >= span { tracks[i].confirmed = true }
+    }
+
+    /// Its spot is close, well inside the frame and not covered by any detection, so YOLO should have found it.
+    private func inClearView(_ o: Obstacle, shot: CameraShot, occluders: [CGRect], tuning t: Tuning) -> Bool {
+        guard simd_distance(xz(o.center), xz(shot.position)) < t.objectViewRange else { return false }
+        let b = Self.imageBounds(o, shot)
+        guard !b.isNull, b.width > 0, b.height > 0, (0.1...0.9).contains(b.midX), (0.1...0.9).contains(b.midY) else { return false }
+        func covered(by r: CGRect) -> CGFloat {
+            let i = b.intersection(r)
+            return i.isNull ? 0 : i.width * i.height / (b.width * b.height)
+        }
+        // Mostly on screen, and not hidden behind (or mislabelled as) something YOLO did see.
+        return covered(by: CGRect(x: 0, y: 0, width: 1, height: 1)) >= 0.7 && !occluders.contains { covered(by: $0) >= 0.3 }
+    }
+
+    /// Where an object's box lands in the portrait image (normalized, the detector's coordinates); .null if partly behind.
+    static func imageBounds(_ o: Obstacle, _ shot: CameraShot) -> CGRect {
         let y = o.displayY ?? o.center.y...(o.center.y + 2 * o.halfSize.x)
         let points = o.corners.flatMap { corner in [y.lowerBound, y.upperBound].compactMap { height -> SIMD2<Float>? in
             guard let p = Detection.project([corner.x, height, corner.y], shot) else { return nil }
@@ -419,11 +441,13 @@ struct ObjectTracks {
             let track = tracks[i], dt = Float(min(max(now - track.lastSeen, 0), 0.5))
             let predicted = track.previousMeasurement + track.velocity * dt
             guard !input.isEmpty, simd_distance(xz(track.o.center), xz(shot.position)) < t.objectRange + 1.5 else { continue }
-            let bounds = imageBounds(track.o, shot)
+            let bounds = Self.imageBounds(track.o, shot)
             for j in input.indices where input[j].label == track.label {
-                let d = simd_distance(xz(predicted), xz(input[j].obstacle.center))
-                guard d < t.objectMergeDistance + min(simd_length(track.velocity) * dt, 0.4) else { continue }
-                pairs.append((d / t.objectMergeDistance + 0.5 * (1 - overlap(bounds, input[j].imageBox)), i, j))
+                let d = simd_distance(xz(predicted), xz(input[j].obstacle.center)), iou = overlap(bounds, input[j].imageBox)
+                // Near on the floor, or the same thing in the image: one camera's floor estimate can be well off.
+                guard d < t.objectMergeDistance + min(simd_length(track.velocity) * dt, 0.4)
+                        || (d < t.objectMatchMaxDistance && iou >= t.objectMatchOverlap) else { continue }
+                pairs.append((d / t.objectMergeDistance + 0.5 * (1 - iou), i, j))
             }
         }
         var matched = Set<Int>(), assignments: [Int: Int] = [:]
@@ -462,29 +486,51 @@ struct ObjectTracks {
                 } else if let new = o.displayY {
                     tracks[i].o.displayY = new
                 }
-                tracks[i].seen += 1
                 tracks[i].lastSeen = now
-                tracks[i].misses = 0
                 tracks[i].lastMiss = -.infinity
+                hit(i, now: now, tuning: t)
             } else {
                 // Suppress near-identical duplicate observations without merging adjacent objects.
                 if matched.contains(where: { tracks[$0].label == observation.label && simd_distance(tracks[$0].previousMeasurement, o.center) < 0.05 }) { continue }
-                tracks.append(Track(id: nextID, label: observation.label, o: o, previousMeasurement: o.center, firstSeen: now, lastSeen: now, lastMeasured: observation.measured ? now : -.infinity))
+                tracks.append(Track(id: nextID, label: observation.label, o: o, previousMeasurement: o.center, firstSeen: now, lastSeen: now,
+                                    lastMeasured: observation.measured ? now : -.infinity, score: t.objectHit))
                 nextID += 1
                 matched.insert(tracks.count - 1)
             }
         }
-        // No depth evidence, including when looking away, is unknown rather than clear.
-        for i in tracks.indices where !matched.contains(i) {
-            guard simd_distance(xz(tracks[i].o.center), xz(shot.position)) < t.objectRange,
-                  !features.isEmpty, now - tracks[i].lastMiss + 1e-6 >= t.objectEvidenceInterval else { continue }
-            if seesThrough(tracks[i].o, shot: shot, features: features, masks: masks, margin: t.carveMargin) {
-                tracks[i].misses += 1
-                tracks[i].lastMiss = now
+        // A leftover duplicate: an unmatched track that is the same thing in the image as a detection another
+        // track of its label just took. Fold it into that track instead of letting both linger.
+        var merged = Set<Int>()
+        for (j, k) in assignments {
+            let kept = tracks[k]
+            for i in tracks.indices where !matched.contains(i) && !merged.contains(i) && tracks[i].label == kept.label
+                && simd_distance(xz(tracks[i].o.center), xz(kept.o.center)) < t.objectMatchMaxDistance
+                && overlap(Self.imageBounds(tracks[i].o, shot), input[j].imageBox) >= t.objectMatchOverlap {
+                tracks[k].score = min(max(tracks[k].score, tracks[i].score), Self.cap(kept.label, t))
+                tracks[k].confirmed = tracks[k].confirmed || tracks[i].confirmed
+                tracks[k].firstSeen = min(tracks[k].firstSeen, tracks[i].firstSeen)
+                merged.insert(i)
             }
         }
-        let span = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
-        tracks.removeAll { $0.misses >= t.objectForgetMisses || (now - $0.lastSeen > 2 && ($0.seen < t.minObjectSightings || $0.lastSeen - $0.firstSeen + 1e-6 < span)) }
+
+        // Absence needs evidence: seeing through the spot, or a clear view of it with nothing detected.
+        // Looking away, or a cluttered view, is unknown and changes nothing.
+        let occluders = masks + input.map(\.imageBox)
+        for i in tracks.indices where !matched.contains(i) && !merged.contains(i) {
+            guard simd_distance(xz(tracks[i].o.center), xz(shot.position)) < t.objectRange,
+                  now - tracks[i].lastMiss + 1e-6 >= t.objectEvidenceInterval else { continue }
+            let drop: Float
+            if !features.isEmpty, seesThrough(tracks[i].o, shot: shot, features: features, masks: masks, margin: t.carveMargin) {
+                drop = t.objectSeenThrough
+            } else if inClearView(tracks[i].o, shot: shot, occluders: occluders, tuning: t) {
+                drop = t.objectUnseen
+            } else { continue }
+            tracks[i].score -= drop
+            tracks[i].lastMiss = now
+        }
+        tracks = tracks.enumerated().filter { i, track in
+            !merged.contains(i) && track.score > 1e-4 && (track.confirmed || now - track.lastSeen <= 2)   // one-off detections fade
+        }.map(\.element)
     }
 
     mutating func ignore(around c: SIMD2<Float>, radius: Float) {

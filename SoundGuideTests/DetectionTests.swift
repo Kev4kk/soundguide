@@ -6,8 +6,8 @@ import simd
 
 private extension ObjectTracks {
     mutating func update(_ boxes: [Obstacle], shot: CameraShot, now: Double, tuning t: Tuning,
-                         rays: [SIMD3<Float>] = [], masks: [CGRect] = []) {
-        update(boxes.map { ObjectObservation(obstacle: $0, label: "chair", imageBox: .null) },
+                         rays: [SIMD3<Float>] = [], masks: [CGRect] = [], label: String = "chair", imageBox: CGRect = .null) {
+        update(boxes.map { ObjectObservation(obstacle: $0, label: label, imageBox: imageBox) },
                shot: shot, now: now, tuning: t, features: rays, masks: masks)
     }
 }
@@ -343,26 +343,84 @@ final class DetectionTests: XCTestCase {
         XCTAssertEqual(obs[0].center.x, 0.1 / 3, accuracy: 1e-4)
     }
 
-    func testTrackForgottenOnlyWhenItsSpotIsInViewAndEmpty() {
+    /// Confirms a chair at its 3-sighting score; returns how many absence steps of `drop` it takes to forget it.
+    func confirmedChair(_ tr: inout ObjectTracks, _ box: Obstacle, drop: Float) -> Int {
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        return Int((3 * t.objectHit / drop - 1e-4).rounded(.up))
+    }
+
+    func testTrackForgottenOnlyWithEvidenceOfAbsence() {
         var tr = ObjectTracks()
         let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
-        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
+        let steps = confirmedChair(&tr, box, drop: t.objectSeenThrough)
         let rays: [SIMD3<Float>] = [-0.1, 0, 0.1].map { x in shot().position + (SIMD3<Float>(x, 0.25, -1.4) - shot().position) * 2 }
-        for i in 0..<t.objectForgetMisses {
-            tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t, rays: rays)
-        }
-        for i in 0..<t.objectForgetMisses {
-            tr.update([], shot: shot(), now: 3 + Double(i) * 0.2, tuning: t, rays: rays, masks: [CGRect(x: 0, y: 0, width: 1, height: 1)])
-        }
-        for i in 0..<t.objectForgetMisses {
-            tr.update([], shot: shot(), now: 5 + Double(i) * 0.2, tuning: t)
+        // Looking away, or a detection covering the spot, is unknown: nothing changes.
+        for i in 0..<20 { tr.update([], shot: shot(yaw: .pi), now: 1 + Double(i) * 0.2, tuning: t, rays: rays) }
+        for i in 0..<20 {
+            tr.update([], shot: shot(), now: 6 + Double(i) * 0.2, tuning: t, rays: rays, masks: [CGRect(x: 0, y: 0, width: 1, height: 1)])
         }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
         // At 50 Hz only the first miss in each 200 ms interval counts.
-        for i in 0..<(10 * (t.objectForgetMisses - 1)) { tr.update([], shot: shot(), now: 7 + Double(i) * 0.02, tuning: t, rays: rays) }
+        for i in 0..<(10 * (steps - 1)) { tr.update([], shot: shot(), now: 11 + Double(i) * 0.02, tuning: t, rays: rays) }
         XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
-        tr.update([], shot: shot(), now: 7 + Double(t.objectForgetMisses - 1) * 0.2, tuning: t, rays: rays)
+        tr.update([], shot: shot(), now: 11 + Double(steps - 1) * 0.2, tuning: t, rays: rays)
         XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
+
+    func testClearViewWithNothingDetectedForgetsWithoutFeaturesBehind() {
+        // A bare wall behind gives no feature points to see through; a clear, empty view still counts.
+        var tr = ObjectTracks()
+        let box = Obstacle(center: [0, 0, -1.4], halfSize: [0.2, 0.2])
+        let steps = confirmedChair(&tr, box, drop: t.objectUnseen)
+        for i in 0..<(steps - 1) { tr.update([], shot: shot(), now: 1 + Double(i) * 0.2, tuning: t) }
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        tr.update([], shot: shot(), now: 1 + Double(steps - 1) * 0.2, tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
+    }
+
+    func testGlassTableSurvivesBeingSeenThrough() {
+        // YOLO keeps finding it while the camera also sees the floor and wall through it.
+        var tr = ObjectTracks()
+        let table = Obstacle(center: [0, 0, -1.4], halfSize: [0.3, 0.3])
+        let rays: [SIMD3<Float>] = [-0.1, 0, 0.1].map { x in shot().position + (SIMD3<Float>(x, 0.25, -1.4) - shot().position) * 2 }
+        for i in 0..<40 {
+            let now = Double(i) * 0.2
+            if i % 2 == 0 { tr.update([table], shot: shot(), now: now, tuning: t, label: "dining table") }
+            else { tr.update([], shot: shot(), now: now, tuning: t, rays: rays) }
+        }
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+    }
+
+    func testFurnitureOutlastsAChair() {
+        var tr = ObjectTracks()
+        let chair = Obstacle(center: [-0.4, 0, -1.6], halfSize: [0.2, 0.2]), couch = Obstacle(center: [0.4, 0, -1.6], halfSize: [0.2, 0.2])
+        let both = [ObjectObservation(obstacle: chair, label: "chair", imageBox: .null),
+                    ObjectObservation(obstacle: couch, label: "couch", imageBox: .null)]
+        for i in 0..<10 { tr.update(both, shot: shot(), now: Double(i) * 0.2, tuning: t, features: [], masks: []) }
+        let chairSteps = Int((t.objectMaxScoreByLabel["chair"]! / t.objectUnseen - 1e-4).rounded(.up))
+        for i in 0..<chairSteps { tr.update([], shot: shot(), now: 3 + Double(i) * 0.2, tuning: t) }
+        XCTAssertEqual(tr.confirmed(tuning: t).map(\.label), ["couch"])
+    }
+
+    func testSameObjectInTheImageIsOneTrackEvenWhenTheFloorEstimateIsOff() {
+        let near = Obstacle(center: [0, 0, -1.6], halfSize: [0.3, 0.3]), far = Obstacle(center: [0, 0, -2.5], halfSize: [0.3, 0.3])
+        let seen = ObjectTracks.imageBounds(near, shot())
+        XCTAssertFalse(seen.isNull)
+
+        // A new sighting 0.9 m off on the floor but on the same spot in the image updates the existing couch.
+        var tr = ObjectTracks()
+        for i in 0..<3 { tr.update([near], shot: shot(), now: Double(i) * 0.2, tuning: t, label: "couch", imageBox: seen) }
+        let id = tr.confirmed(tuning: t).map(\.id)
+        for i in 3..<8 { tr.update([far], shot: shot(), now: Double(i) * 0.2, tuning: t, label: "couch", imageBox: seen) }
+        XCTAssertEqual(tr.confirmed(tuning: t).map(\.id), id)
+
+        // Two couches already on the map fold into one once a single detection covers both.
+        var dup = ObjectTracks()
+        for i in 0..<3 { dup.update([near, far], shot: shot(), now: Double(i) * 0.2, tuning: t, label: "couch") }
+        XCTAssertEqual(dup.confirmed(tuning: t).count, 2)
+        dup.update([far], shot: shot(), now: 1, tuning: t, label: "couch", imageBox: seen)
+        XCTAssertEqual(dup.confirmed(tuning: t).count, 1)
     }
 
     func testFastFramesDoNotConfirmTracksPrematurely() {

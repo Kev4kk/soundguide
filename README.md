@@ -21,3 +21,5 @@ This is a hackathon demo, not a mobility aid. Automatic detection can miss obsta
 
 ## 3D web view
 While the app is open, it serves a live 3D view of what it has mapped. The status pills at the top of the screen show the address (for example `http://192.168.1.20:8080`); open it in a browser on a laptop on the same Wi-Fi and allow the local-network prompt on the phone. If the Wi-Fi blocks device-to-device traffic, as venue networks often do, connect both devices to Tailscale and use the `100.x` address shown instead. The page shows the phone's position and trail, ARKit feature points, and a labelled box for each tracked YOLO object. Objects only appear once a floor has been found, and people are never mapped. The page loads three.js from a CDN, so the laptop needs internet. There is no password: anyone on the same network can view it.
+
+The viewer's lettering is the HACKED font by David Libeau: <http://bit.ly/WatchDogsFont>.

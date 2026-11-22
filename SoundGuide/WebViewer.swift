@@ -16,14 +16,26 @@ struct WorldSnapshot: Encodable, Equatable {
     let fwd: [Float]
     let floorY: Float?
     let objects: [Object]
+    let walls: [[Float]]    // other obstacles (walls, surfaces, point clusters) as 4 floor corners x, z
     let range: Float?       // forward clearance the phone is beeping for, nil when it is silent
     let head: [Float]?      // ear x, y, z + AirPods forward x, y, z; nil when the phone's pose is the listener
+    /// Hold to ask: the question heard, the answer so far, and the lines spoken (last few + running count).
+    struct Ask: Encodable, Equatable {
+        let state: String
+        let q: String
+        let a: String
+        let said: [String]
+        let saidCount: Int
+    }
+    let ask: Ask?           // nil when this phone can't ask
 
     init(camera: SIMD3<Float>, forward: SIMD3<Float>, floorY: Float?,
-         objects: [(id: Int, label: String, obstacle: Obstacle)], range: Float? = nil,
-         head: (ear: SIMD3<Float>, forward: SIMD3<Float>)? = nil) {
+         objects: [(id: Int, label: String, obstacle: Obstacle)], walls: [Obstacle] = [], range: Float? = nil,
+         head: (ear: SIMD3<Float>, forward: SIMD3<Float>)? = nil, ask: Ask? = nil) {
+        self.ask = ask
         self.head = head.map { [$0.ear.x, $0.ear.y, $0.ear.z, $0.forward.x, $0.forward.y, $0.forward.z] }
         self.range = range
+        self.walls = walls.map { $0.corners.flatMap { [$0.x, $0.y] } }
         cam = [camera.x, camera.y, camera.z]
         fwd = [forward.x, forward.y, forward.z]
         self.floorY = floorY

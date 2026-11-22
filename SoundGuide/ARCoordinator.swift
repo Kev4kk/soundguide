@@ -235,8 +235,12 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let live = autoDetect && trackingNormal   // otherwise the tracks and points are stale
         web.publish(WorldSnapshot(camera: p, forward: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z), floorY: floorY,
                                   objects: live ? tracks.confirmed(tuning: tuning) : [],
+                                  walls: live ? detected.filter { $0.source != .object }.map(\.obstacle) : [],
                                   range: live && frame.timestamp - lastRangeHit < 0.4 ? rangeDistance : nil,
-                                  head: lastHead))
+                                  head: lastHead,
+                                  ask: asker.state == .unsupported ? nil
+                                      : WorldSnapshot.Ask(state: asker.stateName, q: asker.heard, a: asker.answer,
+                                                          said: asker.spoken, saidCount: asker.spokenCount)))
     }
 
     /// One shared cube mesh drawn in wireframe, not twelve render entities per box.

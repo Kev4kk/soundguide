@@ -8,13 +8,14 @@
   html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
                font: 15px Hacked, ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
   @font-face { font-family: Hacked; src: url(/hacked.ttf) format("truetype"); font-display: swap; }
-  #credit { position: fixed; right: 12px; bottom: 8px; z-index: 1; color: #6a6a6a; font: 10px ui-monospace, Menlo, monospace; text-transform: none; letter-spacing: 0; }
-  #credit a { color: inherit; }
+  /* Heading-up minimap, like the app's Map view. */
+  #mini { position: fixed; right: 16px; top: 16px; z-index: 1; width: min(240px, 38vw); aspect-ratio: 1; padding: 0;
+          background: rgba(0,0,0,.6); border-left: 2px solid #fff; }
   /* Scanlines and a vignette over the canvas. */
   body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
                 background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
                             radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75) 100%); }
-  /* One column, so a long object list scrolls instead of growing over the controls. */
+  /* Controls top left, the Ask conversation bottom left; a long answer scrolls instead of growing over the controls. */
   #side { position: fixed; left: 16px; top: 16px; bottom: 16px; z-index: 1; display: flex; flex-direction: column;
           justify-content: space-between; align-items: flex-start; gap: 16px; pointer-events: none; }
   .panel { padding: 10px 14px; background: rgba(0,0,0,.55); border-left: 2px solid #fff; pointer-events: auto; }
@@ -27,12 +28,14 @@
   #hud button { display: block; margin-top: 8px; padding: 4px 10px; background: none; color: #fff; border: 1px solid #fff;
                 font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
   #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
+  #hud button:disabled { color: #5fd4ff; border-color: #5fd4ff; background: none; cursor: default; }
   #hud button[aria-pressed="false"] { color: #9a9a9a; border-color: #9a9a9a; }
   #status { color: #5fd4ff; }
-  #list { min-width: 200px; min-height: 0; overflow-y: auto; margin: 0; list-style: none; color: #9a9a9a; scrollbar-width: thin; scrollbar-color: #9a9a9a transparent; }
-  #list:empty { display: none; }
-  #list li { display: flex; justify-content: space-between; gap: 24px; line-height: 1.7; }
-  #list li span:first-child { color: #fff; }
+  #ask { margin-top: auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; max-width: min(420px, 80vw); text-transform: none; letter-spacing: 0; font: 14px/1.45 ui-monospace, Menlo, monospace; }
+  #ask[hidden] { display: none; }
+  #ask b { display: block; color: #5fd4ff; font: 13px Hacked, ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+  #ask p { margin: 6px 0 0; color: #fff; }
+  #ask p + p { color: #cfcfcf; }
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { #hud b::after { animation: none; } }
 </style>
@@ -45,14 +48,15 @@
 </head>
 <body>
 <div id="side">
-<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label>Camera <select id="view">
+<div id="hud" class="panel"><b>Live feed</b><span id="status" role="status">Connecting…</span><label>Camera <select id="view">
   <option value="free">Free</option>
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
-</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
-<ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
+</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button><button id="demo">Parking sensor demo</button></div>
+<div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
 </div>
-<div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
+<canvas id="mini" aria-hidden="true"></canvas>
+<!-- Font: HACKED by David Libeau, http://bit.ly/WatchDogsFont (CC-BY credit; see LICENSES/HACKED-font.md) -->
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -152,27 +156,40 @@ beepsButton.onclick = () => {
   lastBeep = -Infinity;   // each AudioContext's clock starts at 0
   if (audio) {
     audio.resume();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(''));   // Safari only lets speech start from a click
     beep(audio.currentTime + 0.05);   // confirms sound works; the phone may well be silent right now
   }
   beepsButton.setAttribute('aria-pressed', !!audio);
   beepsButton.textContent = `Sound: ${audio ? 'on' : 'off'}`;
+  if (!audio) speechSynthesis.cancel();
 };
-function beep(t) {
-  const o = audio.createOscillator(), g = audio.createGain();
+const beepInterval = d => d <= 0.65 ? 0.2 : d <= 1.2 ? 0.45 : 0.85;   // ProximityBeepTiming
+function beep(t, ctx = audio) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
   o.frequency.value = 520;
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(0.6, t + 0.005);
   g.gain.setValueAtTime(0.6, t + 0.06);
   g.gain.linearRampToValueAtTime(0, t + 0.065);
-  o.connect(g).connect(audio.destination);
+  o.connect(g).connect(ctx.destination);
   o.start(t); o.stop(t + 0.07);
 }
+
+// 5 s of an obstacle closing in from 2 m to 0.2 m, then HOLD_S more at 0.2 m (fastest beeps), beeped exactly as
+// the app would. Works with Sound off too.
+const DEMO_S = 5, HOLD_S = 2, demoButton = document.getElementById('demo');
+demoButton.onclick = () => {
+  const ctx = audio ?? new AudioContext(), start = ctx.currentTime + 0.05;
+  for (let t = 0; t < DEMO_S + HOLD_S; t += beepInterval(Math.max(0.2, 2 - 1.8 * t / DEMO_S))) beep(start + t, ctx);
+  demoButton.disabled = true;
+  setTimeout(() => { demoButton.disabled = false; if (ctx !== audio) ctx.close(); }, (DEMO_S + HOLD_S + 0.3) * 1000);
+};
 function beepTick() {
   try { soundTick(); } finally { setTimeout(beepTick, 20); }   // one bad frame must not stop the loop for good
 }
 function soundTick() {
   if (audio && range > 0 && range <= 2) {
-    const interval = range <= 0.65 ? 0.2 : range <= 1.2 ? 0.45 : 0.85, t = audio.currentTime;
+    const interval = beepInterval(range), t = audio.currentTime;
     if (t - lastBeep >= interval) { lastBeep = t; beep(t); }
   }
 }
@@ -251,17 +268,65 @@ function apply(s) {
 
   const count = s.objects.length;
   status.textContent = `${count} object${count === 1 ? '' : 's'}${s.range != null ? ` // ${s.range.toFixed(1)} m ahead` : ''}${s.head ? ' // AirPods' : ''}`;
-  const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
-  list.replaceChildren(...rows.map(([label, d]) => {
-    const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
-    a.textContent = label;
-    b.textContent = d.toFixed(1) + ' m';
-    li.append(a, b);
-    return li;
-  }));
 }
 
-const status = document.getElementById('status'), list = document.getElementById('list');
+const status = document.getElementById('status');
+
+// Same projection as the app's MapFrame: the way you face is up, you sit 68% down, 7 m across.
+const mini = document.getElementById('mini'), mctx = mini.getContext('2d'), MINI_M = 7;
+function drawMini(s, me, fwd) {
+  const dpr = devicePixelRatio || 1, w = mini.clientWidth, h = mini.clientHeight;
+  if (mini.width !== Math.round(w * dpr)) { mini.width = Math.round(w * dpr); mini.height = Math.round(h * dpr); }
+  const g = mctx, ppm = Math.min(w, h) / MINI_M, ax = w / 2, ay = h * 0.68;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const n = Math.hypot(fwd[0], fwd[2]) || 1, fx = fwd[0] / n, fz = fwd[2] / n;   // right = (-fz, fx)
+  const screen = (x, z) => { const dx = x - me[0], dz = z - me[2]; return [ax + (-fz * dx + fx * dz) * ppm, ay - (fx * dx + fz * dz) * ppm]; };
+  const poly = (pts, fill) => {
+    g.beginPath();
+    pts.forEach(([x, z], i) => { const [px, py] = screen(x, z); i ? g.lineTo(px, py) : g.moveTo(px, py); });
+    g.closePath(); g.fillStyle = fill; g.fill();
+  };
+  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(255,255,255,.25)'; g.fillStyle = 'rgba(255,255,255,.5)';
+  g.font = '10px ui-monospace, Menlo, monospace';
+  for (const r of [1, 2]) {
+    g.beginPath(); g.arc(ax, ay, r * ppm, 0, 2 * Math.PI); g.stroke();
+    g.fillText(`${r} m`, ax + 8, ay - r * ppm + 12);
+  }
+  g.setLineDash([]);
+  for (const c of s.walls ?? []) poly([[c[0], c[1]], [c[2], c[3]], [c[4], c[5]], [c[6], c[7]]], 'rgba(255,149,0,.55)');
+  for (const o of s.objects) {
+    // Same box the 3D view draws: local x = (cos yaw, -sin yaw), local z = (sin yaw, cos yaw).
+    const cy = Math.cos(o.yaw), sy = Math.sin(o.yaw), [hx, hz] = o.half;
+    poly([[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, b]) =>
+      [o.c[0] + a * hx * cy + b * hz * sy, o.c[1] - a * hx * sy + b * hz * cy]), 'rgba(255,204,0,.55)');
+  }
+  if (s.range != null) {   // where the beeps say the way ahead is blocked
+    g.strokeStyle = '#ff3b30'; g.lineWidth = 5; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(ax - 0.3 * ppm, ay - s.range * ppm); g.lineTo(ax + 0.3 * ppm, ay - s.range * ppm); g.stroke();
+    g.lineWidth = 1;
+  }
+  g.beginPath(); g.moveTo(ax, ay - 22); g.lineTo(ax - 9, ay + 4); g.lineTo(ax + 9, ay + 4); g.closePath();
+  g.fillStyle = '#fff'; g.fill();
+  g.beginPath(); g.arc(ax, ay, 7, 0, 2 * Math.PI); g.fillStyle = '#0a84ff'; g.fill();
+}
+
+// Hold to ask, mirrored: the question as heard, the answer as it streams, and (with Sound on) the same lines
+// spoken in the browser's own voice as the phone says them.
+const askPanel = document.getElementById('ask'), askState = document.getElementById('ask-state');
+const askQ = document.getElementById('ask-q'), askA = document.getElementById('ask-a');
+const ASK_LABELS = { listening: 'Listening', transcribing: 'Listening', thinking: 'Thinking', ready: 'Answer' };
+let spokenCount = null;   // null until the first snapshot: lines from before the page opened are not replayed
+function showAsk(ask) {
+  askPanel.hidden = !ask || (!ask.q && !ask.a && !['listening', 'transcribing'].includes(ask.state));
+  if (!ask) return;
+  askState.textContent = `Ask // ${ASK_LABELS[ask.state] ?? ask.state}`;
+  askQ.textContent = ask.q ? `“${ask.q}”` : (ask.state === 'listening' ? 'Listening…' : '');
+  askA.textContent = ask.a;
+  const fresh = spokenCount == null ? 0 : Math.min(ask.saidCount - spokenCount, ask.said.length);
+  spokenCount = ask.saidCount;
+  if (audio && fresh > 0) for (const line of ask.said.slice(-fresh)) speechSynthesis.speak(new SpeechSynthesisUtterance(line));
+}
 async function poll() {
   const started = performance.now();
   try {
@@ -269,6 +334,8 @@ async function poll() {
     // AirPods steering: view and sound follow the head (no position of its own: ears above the phone).
     if (s.head) { s.cam = s.head.slice(0, 3); s.fwd = s.head.slice(3); }
     range = s.range ?? null;
+    showAsk(s.ask);
+    if (s.cam) drawMini(s, s.cam, s.fwd);
     apply(s);
   } catch {
     range = null;   // never beep from a stale reading
