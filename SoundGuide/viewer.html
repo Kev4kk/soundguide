@@ -263,6 +263,7 @@ function apply(s) {
 
 const status = document.getElementById('status'), list = document.getElementById('list');
 async function poll() {
+  const started = performance.now();
   try {
     const s = await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json();
     // AirPods steering: view and sound follow the head (no position of its own: ears above the phone).
@@ -273,7 +274,8 @@ async function poll() {
     range = null;   // never beep from a stale reading
     status.textContent = 'Signal lost. Keep SoundGuide open and on the same Wi-Fi.';
   }
-  setTimeout(poll, POLL_MS);
+  // Count the round trip (~80-180 ms over Tailscale) into the period, so it really is ~10 Hz. One request at a time.
+  setTimeout(poll, Math.max(0, POLL_MS - (performance.now() - started)));
 }
 document.fonts.load('34px Hacked').catch(() => {}).finally(poll);   // name plates are drawn to a canvas once, so wait for the font
 
