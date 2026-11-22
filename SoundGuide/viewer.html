@@ -265,7 +265,7 @@ function apply(s) {
   }
 
   const count = s.objects.length;
-  status.textContent = `${count} object${count === 1 ? '' : 's'} // ${n / 3} points`;
+  status.textContent = `${count} object${count === 1 ? '' : 's'} // ${n / 3} points${s.head ? ' // AirPods' : ''}`;
   const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
   list.replaceChildren(...rows.map(([label, d]) => {
     const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
@@ -280,6 +280,8 @@ const status = document.getElementById('status'), list = document.getElementById
 async function poll() {
   try {
     const s = await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json();
+    // AirPods steering: view and sound follow the head (no position of its own: ears above the phone).
+    if (s.head) { s.cam = s.head.slice(0, 3); s.fwd = s.head.slice(3); }
     range = s.range ?? null;
     buzz = s.buzz ?? null;
     phonePose = s;
