@@ -11,11 +11,27 @@ final class Asker: ObservableObject {
     @Published private(set) var heard = ""
     var busy: Bool { state == .listening || state == .transcribing || state == .thinking }
 
-    static let instructions = """
+    static let basePrompt = """
         You help a blind person walking indoors. The image is what their phone camera sees right now, \
-        pointing the way they face. Your answer is read aloud: one or two short sentences, no lists. \
-        Give directions as left, right or ahead, with rough distances. If you can't tell from the image, say so.
+        pointing the way they face. Your answer is read aloud: two or three short sentences, no lists.
+        If they ask what is around them or what something is, describe what you see and where it is \
+        (left, right or ahead, with rough distances). Don't tell them what to do or where to go.
+        Only give directions when they ask how to get somewhere or which way to go.
+        If you can't tell from the image, say so.
         """
+
+    struct Exchange: Equatable { let question: String, answer: String }
+    /// This app run's questions and answers, text only. Gone when the app quits.
+    private(set) var history: [Exchange] = []
+    // ponytail: last 6 only; the on-device context also has to hold the image. Summarise older ones if follow-ups need more.
+    static let historyLimit = 6
+
+    static func instructions(history: [Exchange]) -> String {
+        guard !history.isEmpty else { return basePrompt }
+        let lines = history.suffix(historyLimit).map { "Q: \($0.question)\nA: \($0.answer)" }
+        return basePrompt + "\nEarlier in this conversation (you can't see those earlier images any more):\n"
+            + lines.joined(separator: "\n")
+    }
 
     private let say: (String) -> Void
     private let recognizer = SFSpeechRecognizer()
@@ -109,7 +125,7 @@ final class Asker: ObservableObject {
 
     @available(iOS 27, *)
     private func warmSession() {
-        let s = LanguageModelSession(instructions: Self.instructions)
+        let s = LanguageModelSession(instructions: Self.instructions(history: history))
         s.prewarm()
         session = s
     }
@@ -117,10 +133,16 @@ final class Asker: ObservableObject {
     @available(iOS 27, *)
     private func answer(_ question: String) async {
         guard let image else { return }
-        // ponytail: one fresh session per question, so earlier images don't fill the context.
-        let s = session as? LanguageModelSession ?? LanguageModelSession(instructions: Self.instructions)
-        warmSession()
-        var seen = 0, pending = ""
+        // A fresh session per question, so earlier images don't fill the context; earlier answers ride in the instructions.
+        let s = session as? LanguageModelSession ?? LanguageModelSession(instructions: Self.instructions(history: history))
+        var seen = 0, pending = "", said = ""
+        defer {
+            // Cut-off answers count too: a follow-up may be about what was already heard.
+            let a = said.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !a.isEmpty { history.append(Exchange(question: question, answer: a)) }
+            if history.count > Self.historyLimit { history.removeFirst(history.count - Self.historyLimit) }
+            warmSession()
+        }
         do {
             let stream = s.streamResponse {
                 Attachment(image, orientation: .right)   // sensor is landscape; phone is held upright
@@ -128,6 +150,7 @@ final class Asker: ObservableObject {
             }
             for try await part in stream {
                 guard !Task.isCancelled else { return }
+                said = part.content
                 pending += part.content.dropFirst(seen)
                 seen = part.content.count
                 let (done, rest) = Sentences.split(pending)

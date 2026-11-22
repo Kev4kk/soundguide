@@ -14,3 +14,15 @@ final class SentencesTests: XCTestCase {
         XCTAssertEqual(rest, "Is that a step?")
     }
 }
+
+final class AskHistoryTests: XCTestCase {
+    func testEarlierAnswersRideInTheInstructions() {
+        XCTAssertEqual(Asker.instructions(history: []), Asker.basePrompt)
+        let h = (1...8).map { Asker.Exchange(question: "q\($0)", answer: "a\($0)") }
+        let text = Asker.instructions(history: h)
+        XCTAssertTrue(text.hasPrefix(Asker.basePrompt))
+        XCTAssertTrue(text.contains("Q: q8\nA: a8"))
+        XCTAssertFalse(text.contains("q2"), "only the last \(Asker.historyLimit) are kept")
+        XCTAssertTrue(text.contains("Q: q3"))
+    }
+}
