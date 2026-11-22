@@ -28,6 +28,7 @@
   #hud button { display: block; margin-top: 8px; padding: 4px 10px; background: none; color: #fff; border: 1px solid #fff;
                 font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
   #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
+  #hud button:disabled { color: #5fd4ff; border-color: #5fd4ff; background: none; cursor: default; }
   #hud button[aria-pressed="false"] { color: #9a9a9a; border-color: #9a9a9a; }
   #status { color: #5fd4ff; }
   #ask { margin-top: auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; max-width: min(420px, 80vw); text-transform: none; letter-spacing: 0; font: 14px/1.45 ui-monospace, Menlo, monospace; }
@@ -51,7 +52,7 @@
   <option value="free">Free</option>
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
-</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
+</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button><button id="demo">Parking sensor demo</button></div>
 <div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
 </div>
 <canvas id="mini" aria-hidden="true"></canvas>
@@ -162,22 +163,32 @@ beepsButton.onclick = () => {
   beepsButton.textContent = `Sound: ${audio ? 'on' : 'off'}`;
   if (!audio) speechSynthesis.cancel();
 };
-function beep(t) {
-  const o = audio.createOscillator(), g = audio.createGain();
+const beepInterval = d => d <= 0.65 ? 0.2 : d <= 1.2 ? 0.45 : 0.85;   // ProximityBeepTiming
+function beep(t, ctx = audio) {
+  const o = ctx.createOscillator(), g = ctx.createGain();
   o.frequency.value = 520;
   g.gain.setValueAtTime(0, t);
   g.gain.linearRampToValueAtTime(0.6, t + 0.005);
   g.gain.setValueAtTime(0.6, t + 0.06);
   g.gain.linearRampToValueAtTime(0, t + 0.065);
-  o.connect(g).connect(audio.destination);
+  o.connect(g).connect(ctx.destination);
   o.start(t); o.stop(t + 0.07);
 }
+
+// 5 s of an obstacle closing in from 2 m to 0.2 m, beeped exactly as the app would. Works with Sound off too.
+const DEMO_S = 5, demoButton = document.getElementById('demo');
+demoButton.onclick = () => {
+  const ctx = audio ?? new AudioContext(), start = ctx.currentTime + 0.05;
+  for (let t = 0; t < DEMO_S; t += beepInterval(2 - 1.8 * t / DEMO_S)) beep(start + t, ctx);
+  demoButton.disabled = true;
+  setTimeout(() => { demoButton.disabled = false; if (ctx !== audio) ctx.close(); }, (DEMO_S + 0.3) * 1000);
+};
 function beepTick() {
   try { soundTick(); } finally { setTimeout(beepTick, 20); }   // one bad frame must not stop the loop for good
 }
 function soundTick() {
   if (audio && range > 0 && range <= 2) {
-    const interval = range <= 0.65 ? 0.2 : range <= 1.2 ? 0.45 : 0.85, t = audio.currentTime;
+    const interval = beepInterval(range), t = audio.currentTime;
     if (t - lastBeep >= interval) { lastBeep = t; beep(t); }
   }
 }
