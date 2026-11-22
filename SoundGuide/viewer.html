@@ -14,7 +14,7 @@
   body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
                 background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
                             radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75) 100%); }
-  /* One column, so a long object list scrolls instead of growing over the controls. */
+  /* Controls top left, the Ask conversation bottom left; a long answer scrolls instead of growing over the controls. */
   #side { position: fixed; left: 16px; top: 16px; bottom: 16px; z-index: 1; display: flex; flex-direction: column;
           justify-content: space-between; align-items: flex-start; gap: 16px; pointer-events: none; }
   .panel { padding: 10px 14px; background: rgba(0,0,0,.55); border-left: 2px solid #fff; pointer-events: auto; }
@@ -29,15 +29,11 @@
   #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
   #hud button[aria-pressed="false"] { color: #9a9a9a; border-color: #9a9a9a; }
   #status { color: #5fd4ff; }
-  #list { min-width: 200px; min-height: 0; overflow-y: auto; margin: 0; list-style: none; color: #9a9a9a; scrollbar-width: thin; scrollbar-color: #9a9a9a transparent; }
-  #list:empty { display: none; }
-  #ask { max-width: min(420px, 80vw); text-transform: none; letter-spacing: 0; font: 14px/1.45 ui-monospace, Menlo, monospace; }
+  #ask { margin-top: auto; min-height: 0; overflow-y: auto; scrollbar-width: thin; max-width: min(420px, 80vw); text-transform: none; letter-spacing: 0; font: 14px/1.45 ui-monospace, Menlo, monospace; }
   #ask[hidden] { display: none; }
   #ask b { display: block; color: #5fd4ff; font: 13px Hacked, ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
   #ask p { margin: 6px 0 0; color: #fff; }
   #ask p + p { color: #cfcfcf; }
-  #list li { display: flex; justify-content: space-between; gap: 24px; line-height: 1.7; }
-  #list li span:first-child { color: #fff; }
   @keyframes blink { 50% { opacity: 0; } }
   @media (prefers-reduced-motion: reduce) { #hud b::after { animation: none; } }
 </style>
@@ -56,7 +52,6 @@
   <option value="chase" selected>Third person</option>
 </select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
 <div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
-<ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
 <script type="module">
@@ -259,17 +254,9 @@ function apply(s) {
 
   const count = s.objects.length;
   status.textContent = `${count} object${count === 1 ? '' : 's'}${s.range != null ? ` // ${s.range.toFixed(1)} m ahead` : ''}${s.head ? ' // AirPods' : ''}`;
-  const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
-  list.replaceChildren(...rows.map(([label, d]) => {
-    const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
-    a.textContent = label;
-    b.textContent = d.toFixed(1) + ' m';
-    li.append(a, b);
-    return li;
-  }));
 }
 
-const status = document.getElementById('status'), list = document.getElementById('list');
+const status = document.getElementById('status');
 
 // Hold to ask, mirrored: the question as heard, the answer as it streams, and (with Sound on) the same lines
 // spoken in the browser's own voice as the phone says them.
