@@ -61,6 +61,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             resetRange()
             cameraStatus = autoDetect ? "Starting object detection…" : "Object detection off"
             if !autoDetect {
+                mapGeneration &+= 1   // drop an in-flight point-map build
                 navigationObstacles = []
                 setDetected([])
             }
@@ -82,7 +83,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private let tap = UIImpactFeedbackGenerator(style: .medium)
     private let light = UIImpactFeedbackGenerator(style: .light)
     private let warn = UIImpactFeedbackGenerator(style: .heavy)
-    private var pointMap = PointMap()
+    // The feature-point map lives on its own queue: rebuilding a big map must never stall the frame loop.
+    private let mappingQueue = DispatchQueue(label: "mapping", qos: .userInitiated)
+    private var pointMap = PointMap()   // mappingQueue only
+    private var mapGeneration = 0       // bumped when a build in flight would bring back something removed
+    private var buildBusy = false
     private var ignoredPlanes = Set<UUID>()
     private var lastBuild: TimeInterval = 0
     private var floorY: Float?
@@ -129,13 +134,14 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     // MARK: Automatic obstacles
 
     private func detect(_ frame: ARFrame) {
-        let m = frame.camera.transform
+        let m = frame.camera.transform, t = tuning, now = frame.timestamp
+        let camera = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
         if let pc = frame.rawFeaturePoints {
-            pointMap.add(pc.points, ids: pc.identifiers, camera: SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z),
-                         now: frame.timestamp, tuning: tuning)
+            let pts = pc.points, ids = pc.identifiers
+            mappingQueue.async { [weak self] in self?.pointMap.add(pts, ids: ids, camera: camera, now: now, tuning: t) }
         }
-        guard frame.timestamp - lastBuild >= tuning.detectInterval else { return }
-        lastBuild = frame.timestamp
+        guard !buildBusy, now - lastBuild >= t.detectInterval else { return }
+        lastBuild = now
 
         let planes = frame.anchors.compactMap { $0 as? ARPlaneAnchor }
         let ground = planes.filter { a in
@@ -147,19 +153,34 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         self.floorY = floorY
         classifiedFloor = floors.map { Self.corners($0)[0].y }.min()
 
+        let here = xz(camera)
         let planeBoxes = planes.compactMap { a -> Detected? in
-            guard !ignoredPlanes.contains(a.identifier) else { return nil }
-            return Detection.planeObstacle(corners: Self.corners(a), vertical: a.alignment == .vertical,
-                                           floorY: floorY, tuning: tuning).map { Detected(obstacle: $0, source: .plane(a.identifier)) }
+            guard !ignoredPlanes.contains(a.identifier),
+                  let o = Detection.planeObstacle(corners: Self.corners(a), vertical: a.alignment == .vertical,
+                                                  floorY: floorY, tuning: t),
+                  o.distance(to: here) <= t.activeRadius else { return nil }   // ARKit keeps far planes; we don't need them
+            return Detected(obstacle: o, source: .plane(a.identifier))
         }
-        // Points on a table top would only duplicate the table.
-        let pointBoxes = pointMap.build(floorY: floorY, now: frame.timestamp, tuning: tuning)
-            .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
-            .map { Detected(obstacle: $0, source: .points) }
-        let boxes = planeBoxes + pointBoxes + trackedObjects
-        // Keep route planning on its original cadence; render YOLO results as they arrive.
-        navigationObstacles = boxes.map { $0.obstacle.navigationFootprint }
-        setDetected(boxes)
+
+        buildBusy = true
+        let generation = mapGeneration
+        mappingQueue.async { [weak self] in
+            guard let self else { return }
+            self.pointMap.forget(fartherThan: t.activeRadius, from: here)
+            let built = self.pointMap.build(floorY: floorY, now: now, tuning: t)
+            DispatchQueue.main.async {
+                self.buildBusy = false
+                guard self.autoDetect, self.mapGeneration == generation else { return }
+                // Points on a table top would only duplicate the table.
+                let pointBoxes = built
+                    .filter { b in !planeBoxes.contains { $0.obstacle.distance(to: xz(b.center)) == 0 } }
+                    .map { Detected(obstacle: $0, source: .points) }
+                let boxes = planeBoxes + pointBoxes + self.trackedObjects
+                // Keep warnings on the build cadence; render YOLO results as they arrive.
+                self.navigationObstacles = boxes.map { $0.obstacle.navigationFootprint }
+                self.setDetected(boxes)
+            }
+        }
     }
 
     private var trackedObjects: [Detected] {
@@ -230,9 +251,14 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let m = frame.camera.transform
         let p = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
         let live = autoDetect && trackingNormal   // otherwise the tracks and points are stale
-        web.publish(WorldSnapshot(camera: p, forward: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z), floorY: floorY,
-                                  objects: live ? tracks.confirmed(tuning: tuning) : [],
-                                  points: live ? pointMap.nearest(5000, to: p) : []))
+        let forward = -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z), floor = floorY
+        let objects = live ? tracks.confirmed(tuning: tuning) : []
+        // Picking points and JSON encoding happen off the main thread, next to the point map.
+        mappingQueue.async { [weak self] in
+            guard let self else { return }
+            self.web.publish(WorldSnapshot(camera: p, forward: forward, floorY: floor, objects: objects,
+                                           points: live ? self.pointMap.nearest(5000, to: p) : []))
+        }
     }
 
     /// One shared cube mesh drawn in wireframe, not twelve render entities per box.
@@ -309,7 +335,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let r = d.obstacle.boundingRadius + tuning.detectCell
         switch d.source {
         case .plane(let id): ignoredPlanes.insert(id)
-        case .points: pointMap.ignore(around: xz(d.obstacle.center), radius: r)
+        case .points:
+            mapGeneration &+= 1   // a build in flight still has it
+            let c = xz(d.obstacle.center)
+            mappingQueue.async { [weak self] in self?.pointMap.ignore(around: c, radius: r) }
         case .object:
             detectorGeneration &+= 1 // don't resurrect the removed track from an in-flight snapshot
             tracks.ignore(around: xz(d.obstacle.center), radius: r)

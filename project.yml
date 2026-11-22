@@ -16,7 +16,7 @@ targets:
     info:
       path: SoundGuide/Info.plist
       properties:
-        CFBundleDisplayName: SoundGuide
+        CFBundleDisplayName: $(APP_DISPLAY_NAME)
         NSLocalNetworkUsageDescription: Lets a browser on the same Wi-Fi show a live 3D view of what the phone detects.
         NSBonjourServices: [_http._tcp]
         NSCameraUsageDescription: The camera tracks where you are in the room so sounds come from the right place.
@@ -29,6 +29,7 @@ targets:
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kevinakk.soundguide
+        APP_DISPLAY_NAME: SoundGuide   # override with PRODUCT_BUNDLE_IDENTIFIER to install a second copy side by side
         TARGETED_DEVICE_FAMILY: "1"
         GENERATE_INFOPLIST_FILE: NO
         OTHER_LDFLAGS: ["-weak_framework", "FoundationModels"]   # iOS 26+ only; the app still runs on 17

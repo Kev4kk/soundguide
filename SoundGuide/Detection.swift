@@ -91,7 +91,9 @@ struct PointMap {
     mutating func add(_ pts: [SIMD3<Float>], ids: [UInt64], camera: SIMD3<Float>, now: Double, tuning t: Tuning) {
         var fresh = Set<UInt64>(), rays: [SIMD3<Float>] = []
         for (p, id) in zip(pts, ids) where !isIgnored(xz(p)) {
-            let near = simd_distance(xz(p), xz(camera)) <= t.detectRange
+            let flat = simd_distance(xz(p), xz(camera))
+            guard flat <= t.activeRadius else { continue }   // too far to warn about; forget() would drop it anyway
+            let near = flat <= t.detectRange
             var pt = points[id] ?? Point(p: p, last: now, near: near)
             if near || !pt.near { pt.p = p; pt.near = near }
             pt.seen += 1; pt.last = now; pt.misses = 0
@@ -128,6 +130,12 @@ struct PointMap {
         }
     }
 
+    /// Drops points this far from `c`, so map work stays proportional to the room around you, not the whole walk.
+    /// ponytail: walking back means relearning them; ARKit's drift makes old positions stale anyway.
+    mutating func forget(fartherThan r: Float, from c: SIMD2<Float>) {
+        points = points.filter { simd_distance(xz($0.value.p), c) <= r }
+    }
+
     /// Never detect anything here again (the helper removed a false detection).
     mutating func ignore(around c: SIMD2<Float>, radius: Float) {
         ignored.append((c, radius))
@@ -145,8 +153,8 @@ struct PointMap {
         }
         var left = Set(cells.filter { $0.value.count >= t.minPointsPerCell }.keys)
         var out: [Obstacle] = []
-        while let seed = left.min(by: { ($0.x, $0.y) < ($1.x, $1.y) }) {
-            left.remove(seed)
+        // Seeds in a fixed order, sorted once; picking the min of what's left each time was quadratic in occupied cells.
+        for seed in left.sorted(by: { ($0.x, $0.y) < ($1.x, $1.y) }) where left.remove(seed) != nil {
             var cluster = [seed], i = 0
             while i < cluster.count {
                 let c = cluster[i]; i += 1
@@ -491,7 +499,13 @@ struct ObjectTracks {
             }
         }
         let span = Double(t.minObjectSightings - 1) * t.objectEvidenceInterval
-        tracks.removeAll { $0.misses >= t.objectForgetMisses || (now - $0.lastSeen > 2 && ($0.seen < t.minObjectSightings || $0.lastSeen - $0.firstSeen + 1e-6 < span)) }
+        let here = xz(shot.position)
+        tracks.removeAll {
+            $0.misses >= t.objectForgetMisses
+                || (now - $0.lastSeen > 2 && ($0.seen < t.minObjectSightings || $0.lastSeen - $0.firstSeen + 1e-6 < span))
+                // Out of view can never be "seen through", so far-off objects would otherwise be kept forever.
+                || (now - $0.lastSeen > t.objectForgetAfter && simd_distance(xz($0.o.center), here) > t.objectForgetDistance)
+        }
     }
 
     mutating func ignore(around c: SIMD2<Float>, radius: Float) {
