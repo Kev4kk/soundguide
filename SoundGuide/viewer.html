@@ -57,7 +57,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const MAX_POINTS = 5000, MAX_TRAIL = 5000, POLL_MS = 200;
+const MAX_TRAIL = 5000, POLL_MS = 200, TILE_M = 0.5;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
@@ -74,14 +74,26 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-const grid = new THREE.GridHelper(40, 40, 0x3a3a3a, 0x161616);
-scene.add(grid);
-
-const cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.55 }));
-cloud.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3));
-cloud.geometry.setDrawRange(0, 0);
-cloud.frustumCulled = false;   // the bounding sphere is never recomputed
-scene.add(cloud);
+// Tiled floor at the height the app found. One canvas tile, repeated; the bevel fakes depth without lights.
+const tile = document.createElement('canvas');
+tile.width = tile.height = 128;
+{
+  const g = tile.getContext('2d');
+  g.fillStyle = '#0d0d0d'; g.fillRect(0, 0, 128, 128);
+  g.fillStyle = '#1c1c1c'; g.fillRect(0, 0, 128, 3); g.fillRect(0, 0, 3, 128);       // lit top-left edge
+  g.fillStyle = '#050505'; g.fillRect(0, 125, 128, 3); g.fillRect(125, 0, 3, 128);   // shaded bottom-right edge
+  g.strokeStyle = '#2e2e2e'; g.lineWidth = 2; g.strokeRect(0, 0, 128, 128);          // grout
+}
+const floorTex = new THREE.CanvasTexture(tile);
+floorTex.wrapS = floorTex.wrapT = THREE.RepeatWrapping;
+floorTex.anisotropy = renderer.capabilities.getMaxAnisotropy();
+floorTex.colorSpace = THREE.SRGBColorSpace;
+const FLOOR_M = 40;
+floorTex.repeat.set(FLOOR_M / TILE_M, FLOOR_M / TILE_M);
+const floor = new THREE.Mesh(new THREE.PlaneGeometry(FLOOR_M, FLOOR_M).rotateX(-Math.PI / 2),
+                             new THREE.MeshBasicMaterial({ map: floorTex }));
+floor.position.y = -0.001;   // just under the trail and box bottoms
+scene.add(floor);
 
 // Cone tip along +z, which is the axis Object3D.lookAt aims at the target.
 const phone = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 16).rotateX(Math.PI / 2),
@@ -230,12 +242,11 @@ function apply(s) {
     controls.target.add(delta);
   }
 
-  if (s.floorY != null) grid.position.y = s.floorY;
-
-  const n = Math.min(s.points.length, MAX_POINTS * 3), pos = cloud.geometry.attributes.position;
-  for (let i = 0; i < n; i++) pos.array[i] = s.points[i] / 1000;
-  pos.needsUpdate = true;
-  cloud.geometry.setDrawRange(0, n / 3);
+  floor.visible = s.floorY != null;   // y = 0 is the phone's start height, not the floor
+  if (floor.visible) floor.position.y = s.floorY - 0.001;
+  // Keep the floor under the walker, snapped to whole tiles so the pattern stays put in the world.
+  floor.position.x = Math.round(p.x / TILE_M) * TILE_M;
+  floor.position.z = Math.round(p.z / TILE_M) * TILE_M;
 
   const seen = new Set();
   for (const o of s.objects) {
@@ -265,7 +276,7 @@ function apply(s) {
   }
 
   const count = s.objects.length;
-  status.textContent = `${count} object${count === 1 ? '' : 's'} // ${n / 3} points${s.head ? ' // AirPods' : ''}`;
+  status.textContent = `${count} object${count === 1 ? '' : 's'}${s.head ? ' // AirPods' : ''}`;
   const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
   list.replaceChildren(...rows.map(([label, d]) => {
     const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');

@@ -77,13 +77,6 @@ struct PointMap {
 
     var count: Int { points.count }
 
-    /// Stored points for the web viewer, closest to `c` first when there are more than `limit`.
-    func nearest(_ limit: Int, to c: SIMD3<Float>) -> [SIMD3<Float>] {
-        let all = points.values.map(\.p)
-        guard all.count > limit else { return all }
-        return Array(all.sorted { simd_distance_squared($0, c) < simd_distance_squared($1, c) }.prefix(limit))
-    }
-
     private func cell(_ p: SIMD2<Float>, _ size: Float) -> SIMD2<Int32> { SIMD2<Int32>(p / size, rounding: .down) }
     private func isIgnored(_ p: SIMD2<Float>) -> Bool { ignored.contains { simd_distance($0.center, p) < $0.radius } }
 
