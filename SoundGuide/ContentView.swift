@@ -102,6 +102,7 @@ struct ContentView: View {
                 VStack(spacing: 12) {
                     guideInfo.padding(.top, 56)
                     playButton(height: .infinity, fontSize: 48)
+                    AskButton(asker: ar.asker, begin: ar.beginAsk, end: ar.endAsk, height: 120, fontSize: 32)
                     Button { ar.stopGuiding() } label: {
                         Text("Stop").font(.system(size: 40, weight: .bold))
                             .frame(maxWidth: .infinity, minHeight: 110)
@@ -121,6 +122,8 @@ struct ContentView: View {
                         .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 12))
                         .padding(.horizontal).padding(.top, 56)
                     Spacer()
+                    AskButton(asker: ar.asker, begin: ar.beginAsk, end: ar.endAsk, height: 52, fontSize: 22)
+                        .padding(.horizontal)
                     HStack {
                         playButton(height: 52, fontSize: 22)
                         Button { ar.stopGuiding() } label: {
@@ -149,6 +152,50 @@ struct ContentView: View {
                 .frame(maxWidth: .infinity, minHeight: height == .infinity ? 140 : height, maxHeight: height)
                 .background((ar.guideAudioOn ? Color.gray : Color.green).opacity(0.85),
                             in: RoundedRectangle(cornerRadius: 20))
+        }
+    }
+
+    // Hidden on phones without Apple Intelligence or before iOS 27.
+    private struct AskButton: View {
+        @ObservedObject var asker: Asker
+        let begin: () -> Void, end: () -> Void
+        let height: CGFloat, fontSize: CGFloat
+        @State private var holding = false
+
+        var body: some View {
+            if asker.state != .unsupported {
+                // Not a Button: needs touch-down and touch-up, like the Obstacle button.
+                Label(label, systemImage: "mic.fill")
+                    .font(.system(size: fontSize, weight: .bold)).lineLimit(2).minimumScaleFactor(0.5)
+                    .foregroundStyle(.white)
+                    .frame(maxWidth: .infinity, minHeight: height)
+                    .background(Color.purple.opacity(holding ? 1 : 0.75), in: RoundedRectangle(cornerRadius: 20))
+                    .opacity(enabled ? 1 : 0.5)
+                    .gesture(DragGesture(minimumDistance: 0)
+                        .onChanged { _ in
+                            guard enabled, !holding else { return }
+                            holding = true
+                            begin()
+                        }
+                        .onEnded { _ in
+                            guard holding else { return }
+                            holding = false
+                            end()
+                        })
+                    .accessibilityAddTraits(.isButton)
+                    .accessibilityHint("Double-tap and hold, ask about what's in front of the camera, then let go")
+            }
+        }
+
+        private var enabled: Bool { asker.state == .ready || asker.state == .thinking }
+
+        private var label: String {
+            switch asker.state {
+            case .unsupported, .ready: "Hold to ask"
+            case .unavailable(let why): why
+            case .listening: asker.heard.isEmpty ? "Listening…" : asker.heard
+            case .transcribing, .thinking: "Thinking…"
+            }
         }
     }
 

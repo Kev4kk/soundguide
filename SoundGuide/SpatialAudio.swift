@@ -23,7 +23,10 @@ final class SpatialAudio {
     private var lastBuzz: TimeInterval = 0
 
     init() {
-        try? AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
+        // Record for Ask without the AirPods mic: Bluetooth recording drops AirPods to mono call audio, which kills HRTF.
+        // A2DP is output-only, so input falls back to the iPhone's own mic.
+        try? AVAudioSession.sharedInstance().setCategory(.playAndRecord, mode: .default,
+                                                         options: [.allowBluetoothA2DP, .defaultToSpeaker])
         try? AVAudioSession.sharedInstance().setActive(true)
 
         [beacon, obstacle, chime, proximity].forEach(engine.attach)
@@ -93,6 +96,8 @@ final class SpatialAudio {
         if interrupt { speech.stopSpeaking(at: .immediate) }
         speech.speak(AVSpeechUtterance(string: text))
     }
+
+    func stopSpeaking() { speech.stopSpeaking(at: .immediate) }
 
     private func point(_ v: SIMD3<Float>) -> AVAudio3DPoint { AVAudio3DPoint(x: v.x, y: v.y, z: v.z) }
 
