@@ -8,6 +8,7 @@ final class SpatialAudio {
     private let beacon = AVAudioPlayerNode()
     private let obstacle = AVAudioPlayerNode()
     private let chime = AVAudioPlayerNode()
+    private let proximity = AVAudioPlayerNode()
     private let speech = AVSpeechSynthesizer()
     // Mono is required: stereo sources bypass spatialization.
     private let mono = AVAudioFormat(standardFormatWithSampleRate: 44_100, channels: 1)!
@@ -15,6 +16,7 @@ final class SpatialAudio {
     private lazy var ping = Self.tone(mono, [880], noteDuration: 0.06)
     private lazy var pingOnAxis = Self.tone(mono, [1320], noteDuration: 0.06)
     private lazy var buzz = Self.tone(mono, [220], noteDuration: 0.08, harmonics: true)
+    private lazy var proximityTone = Self.tone(mono, [520], noteDuration: 0.065)
     private lazy var chimeTone = Self.tone(mono, [660, 990], noteDuration: 0.12)
 
     private var lastPing: TimeInterval = 0
@@ -27,7 +29,8 @@ final class SpatialAudio {
                                                          options: [.allowBluetoothA2DP, .defaultToSpeaker])
         try? AVAudioSession.sharedInstance().setActive(true)
 
-        [beacon, obstacle, chime].forEach(engine.attach)
+        [beacon, obstacle, chime, proximity].forEach(engine.attach)
+        engine.connect(proximity, to: engine.mainMixerNode, format: mono)
         engine.attach(env)
         engine.connect(beacon, to: env, format: mono)
         engine.connect(obstacle, to: env, format: mono)
@@ -49,7 +52,7 @@ final class SpatialAudio {
     }
 
     func stop() {
-        [beacon, obstacle, chime].forEach { $0.stop() }
+        [beacon, obstacle, chime, proximity].forEach { $0.stop() }
         engine.pause()
     }
 
@@ -78,6 +81,13 @@ final class SpatialAudio {
                 lastBuzz = now
             }
         }
+    }
+
+    /// A short non-spatial proximity cue also works before a route has started.
+    func playProximityBeep() {
+        if !engine.isRunning { do { try engine.start() } catch { return } }
+        if !proximity.isPlaying { proximity.play() }
+        proximity.scheduleBuffer(proximityTone, at: nil, options: .interrupts)
     }
 
     func playChime() { chime.scheduleBuffer(chimeTone, at: nil, options: .interrupts) }
