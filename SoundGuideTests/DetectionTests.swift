@@ -62,6 +62,23 @@ final class DetectionTests: XCTestCase {
 
     // MARK: Point map
 
+    func testManySeparateClustersEachGetABox() {
+        var m = PointMap()
+        feed(&m, (-2...2).flatMap { blob(Float($0), -2) })
+        XCTAssertEqual(m.build(floorY: 0, now: 0.1, tuning: t).count, 5)
+    }
+
+    func testPointsBeyondActiveRadiusAreDroppedOrNeverStored() {
+        var m = PointMap()
+        feed(&m, blob(t.activeRadius + 2, 0))
+        XCTAssertEqual(m.count, 0)
+        feed(&m, blob(1, -2), firstID: 1000)
+        m.forget(fartherThan: t.activeRadius, from: [1, -2])
+        XCTAssertEqual(m.build(floorY: 0, now: 0.1, tuning: t).count, 1)
+        m.forget(fartherThan: t.activeRadius, from: [20, 0])   // walked away
+        XCTAssertEqual(m.count, 0)
+    }
+
     func testStablePointsBecomeOneBox() {
         var m = PointMap()
         feed(&m, blob(1, -2))
@@ -341,6 +358,19 @@ final class DetectionTests: XCTestCase {
         let obs = tr.obstacles(tuning: t)
         XCTAssertEqual(obs.count, 1)
         XCTAssertEqual(obs[0].center.x, 0.1 / 3, accuracy: 1e-4)
+    }
+
+    func testFarObjectsUnseenForLongAreForgotten() {
+        var tr = ObjectTracks()
+        let box = Obstacle(center: [0, 0, -1.6], halfSize: [0.2, 0.2])
+        for i in 0..<3 { tr.update([box], shot: shot(), now: Double(i) * 0.2, tuning: t) }
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        var far = shot(); far.transform.columns.3 = [20, 1.4, 0, 1]
+        tr.update([], shot: shot(yaw: .pi), now: 40, tuning: t)   // looking away nearby: unknown, keep it
+        tr.update([], shot: far, now: 10, tuning: t)                // far but recently seen: keep it
+        XCTAssertEqual(tr.obstacles(tuning: t).count, 1)
+        tr.update([], shot: far, now: 41, tuning: t)
+        XCTAssertTrue(tr.obstacles(tuning: t).isEmpty)
     }
 
     func testTrackForgottenOnlyWhenItsSpotIsInViewAndEmpty() {

@@ -37,6 +37,7 @@ struct Tuning {
     var unstablePointLifetime: Double = 2  // drop points that never became stable after this long
     var detectInterval: Double = 0.5       // seconds between obstacle map rebuilds
     var removeRadius: Float = 0.3          // a map tap picks a detected obstacle this close
+    var activeRadius: Float = 6            // feature points and planes further than this are dropped / skipped
 
     // Object detector (YOLO26n via Vision): a box on the floor where each detected object stands.
     var objectEvidenceInterval: Double = 0.2   // preserve confirmation and forgetting at higher frame rates
@@ -49,6 +50,8 @@ struct Tuning {
     var objectMergeDistance: Float = 0.6   // a box this close to a known object is the same object
     var minObjectSightings = 3
     var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
+    var objectForgetDistance: Float = 7    // objects this far away...
+    var objectForgetAfter: Double = 30     // ...and unseen this long are forgotten
 }
 
 enum Haptic: Equatable {
@@ -134,8 +137,12 @@ enum Guidance {
     /// ponytail: only the soonest-hit obstacle buzzes; one player per obstacle if rooms get crowded.
     static func warning(listener l: SIMD3<Float>, velocity: SIMD2<Float>, obstacles: [Obstacle], tuning t: Tuning) -> Warning {
         var out = Warning(buzzInterval: t.buzzFarInterval)
-        guard simd_length(velocity) >= t.minWarnSpeed,
+        let speed = simd_length(velocity)
+        // Anything further than you can walk within warnTime can't be hit in time; skips the 30-step check for most boxes.
+        let reach = speed * t.warnTime + t.bodyClearance
+        guard speed >= t.minWarnSpeed,
               let (o, ttc) = obstacles
+                  .filter({ $0.distance(to: xz(l)) <= reach })
                   .compactMap({ o in timeToCollision(from: xz(l), velocity: velocity, obstacle: o,
                                                      clearance: t.bodyClearance, horizon: t.warnTime).map { (o, $0) } })
                   .min(by: { $0.1 < $1.1 }),
