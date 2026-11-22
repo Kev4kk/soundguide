@@ -6,7 +6,10 @@
 <title>SoundGuide 3D</title>
 <style>
   html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
-               font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+               font: 15px Hacked, ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  @font-face { font-family: Hacked; src: url(/hacked.ttf) format("truetype"); font-display: swap; }
+  #credit { position: fixed; right: 12px; bottom: 8px; z-index: 1; color: #6a6a6a; font: 10px ui-monospace, Menlo, monospace; text-transform: none; letter-spacing: 0; }
+  #credit a { color: inherit; }
   /* Scanlines and a vignette over the canvas. */
   body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
                 background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
@@ -14,7 +17,7 @@
   .panel { position: fixed; left: 16px; padding: 10px 14px; background: rgba(0,0,0,.55);
            border-left: 2px solid #fff; z-index: 1; }
   #hud { top: 16px; }
-  #hud b { display: block; font-size: 14px; letter-spacing: .2em; }
+  #hud b { display: block; font-size: 22px; letter-spacing: .12em; }
   #hud b::after { content: "_"; animation: blink 1s steps(1) infinite; }
   #hud label { display: block; margin-top: 6px; color: #9a9a9a; cursor: pointer; }
   #hud select { background: #000; color: #fff; border: 1px solid #9a9a9a; padding: 2px 4px;
@@ -45,6 +48,7 @@
   <option value="chase">Third person</option>
 </select></label><button id="labels" aria-pressed="true">Labels: on</button></div>
 <ul id="list" class="panel" aria-label="Detected objects"></ul>
+<div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -95,7 +99,7 @@ const boxes = new Map();   // track id -> { box, tag, leader }
 const name = o => `${o.label}_${String(o.id).padStart(2, '0')}`;
 
 function makeTag(text) {
-  const font = '600 30px ui-monospace, Menlo, Consolas, monospace';
+  const font = '34px Hacked, ui-monospace, Menlo, Consolas, monospace';
   const canvas = document.createElement('canvas');
   let g = canvas.getContext('2d');
   g.font = font;
@@ -212,7 +216,7 @@ async function poll() {
   }
   setTimeout(poll, POLL_MS);
 }
-poll();
+document.fonts.load('34px Hacked').catch(() => {}).finally(poll);   // name plates are drawn to a canvas once, so wait for the font
 
 const clock = new THREE.Clock(), before = new THREE.Vector3();
 renderer.setAnimationLoop(() => {

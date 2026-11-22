@@ -36,7 +36,7 @@ struct WorldSnapshot: Encodable, Equatable {
 final class WebViewer {
     static let port: UInt16 = 8080
 
-    enum Route: Equatable { case page, state, notFound }
+    enum Route: Equatable { case page, state, font, notFound }
 
     static func route(_ request: String) -> Route {
         let parts = request.prefix { $0 != "\r" && $0 != "\n" }.split(separator: " ")
@@ -44,6 +44,7 @@ final class WebViewer {
         switch parts[1].prefix(while: { $0 != "?" }) {
         case "/": return .page
         case "/state": return .state
+        case "/hacked.ttf": return .font
         default: return .notFound
         }
     }
@@ -54,6 +55,7 @@ final class WebViewer {
     private var state = Data("{}".utf8)
     private var lastPoll = -Double.infinity
     private let page = Bundle.main.url(forResource: "viewer", withExtension: "html").flatMap { try? Data(contentsOf: $0) } ?? Data()
+    private let font = Bundle.main.url(forResource: "hacked", withExtension: "ttf").flatMap { try? Data(contentsOf: $0) } ?? Data()
 
     /// True while a browser is polling, so the app builds no snapshots for nobody.
     var watched: Bool {
@@ -91,6 +93,7 @@ final class WebViewer {
             guard let self, let data else { return c.cancel() }
             switch Self.route(String(decoding: data, as: UTF8.self)) {
             case .page: self.respond(c, "200 OK", "text/html; charset=utf-8", self.page)
+            case .font: self.respond(c, "200 OK", "font/ttf", self.font)
             case .state:
                 self.lock.lock()
                 let body = self.state

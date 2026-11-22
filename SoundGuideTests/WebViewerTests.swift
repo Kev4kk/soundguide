@@ -19,6 +19,7 @@ final class WebViewerTests: XCTestCase {
 
         XCTAssertEqual(WebViewer.route("GET / HTTP/1.1\r\nHost: x\r\n\r\n"), .page)
         XCTAssertEqual(WebViewer.route("GET /state?t=1 HTTP/1.1\r\n\r\n"), .state)
+        XCTAssertEqual(WebViewer.route("GET /hacked.ttf HTTP/1.1\r\n\r\n"), .font)
         XCTAssertEqual(WebViewer.route("GET /etc/passwd HTTP/1.1\r\n\r\n"), .notFound)
         XCTAssertEqual(WebViewer.route("POST /state HTTP/1.1\r\n\r\n"), .notFound)
         XCTAssertEqual(WebViewer.route(""), .notFound)
