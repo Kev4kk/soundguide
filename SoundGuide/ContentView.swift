@@ -1,28 +1,30 @@
 import SwiftUI
 
 struct ContentView: View {
-    enum Mode: String, CaseIterable { case camera = "Camera", map = "Map" }
+    enum Mode: String, CaseIterable { case camera = "Camera", map = "Map", user = "User" }
 
     @StateObject private var ar = ARController()
     @State private var mode = Mode.camera
-    @State private var covered = false
 
     var body: some View {
         ZStack {
             // Always running, even behind the map: tracking and detection need the camera.
             ARViewContainer(controller: ar).ignoresSafeArea()
             if mode == .map { mapView }
+            if mode == .user { UserView(asker: ar.asker, begin: ar.beginAsk, end: ar.endAsk) }
             VStack(spacing: 8) {
                 Picker("View", selection: $mode) {
                     ForEach(Mode.allCases, id: \.self) { Text($0.rawValue) }
                 }
                 .pickerStyle(.segmented).padding(.horizontal)
-                statusPills
-                Spacer()
-                bottomBar
+                if mode != .user {
+                    statusPills
+                    Spacer()
+                    bottomBar
+                }
             }
             .padding(.vertical, 8)
-            if covered { coverScreen }
+            .frame(maxHeight: .infinity, alignment: .top)
         }
     }
 
@@ -58,38 +60,14 @@ struct ContentView: View {
     private var bottomBar: some View {
         VStack(spacing: 10) {
             AskButton(asker: ar.asker, begin: ar.beginAsk, end: ar.endAsk, height: 64, fontSize: 24)
-            HStack {
-                Toggle(isOn: $ar.autoDetect) {
-                    Text("Detect (\(ar.detectedCount))").font(.subheadline.weight(.semibold))
-                }
-                .tint(.orange).fixedSize()
-                .padding(.horizontal, 12).padding(.vertical, 6)
-                .background(.ultraThinMaterial, in: Capsule())
-                Spacer()
-                Button { covered = true } label: {
-                    Label("Cover screen", systemImage: "eye.slash").font(.subheadline.weight(.semibold))
-                }
-                .buttonStyle(.borderedProminent).tint(.black.opacity(0.7))
+            Toggle(isOn: $ar.autoDetect) {
+                Text("Detect (\(ar.detectedCount))").font(.subheadline.weight(.semibold))
             }
+            .tint(.orange).fixedSize()
+            .padding(.horizontal, 12).padding(.vertical, 6)
+            .background(.ultraThinMaterial, in: Capsule())
         }
         .padding(.horizontal)
-    }
-
-    // Walker's screen: nothing to see, one big target to ask.
-    private var coverScreen: some View {
-        VStack(spacing: 16) {
-            Text(ar.proximityStatus).font(.title2).multilineTextAlignment(.center).padding(.top, 40)
-            AskButton(asker: ar.asker, begin: ar.beginAsk, end: ar.endAsk, height: .infinity, fontSize: 44)
-            Button { covered = false } label: {
-                Label("Show screen", systemImage: "eye").font(.title3.bold())
-                    .frame(maxWidth: .infinity, minHeight: 60)
-            }
-            .buttonStyle(.bordered).tint(.white)
-        }
-        .padding()
-        .foregroundStyle(.white)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(Color.black.ignoresSafeArea())
     }
 
     private var headphoneStatus: some View {
@@ -118,24 +96,12 @@ struct ContentView: View {
                     .foregroundStyle(.white)
                     .frame(maxWidth: .infinity, minHeight: height == .infinity ? 140 : height, maxHeight: height)
                     .background(Color.purple.opacity(holding ? 1 : 0.75), in: RoundedRectangle(cornerRadius: 20))
-                    .opacity(enabled ? 1 : 0.5)
-                    .gesture(DragGesture(minimumDistance: 0)
-                        .onChanged { _ in
-                            guard enabled, !holding else { return }
-                            holding = true
-                            begin()
-                        }
-                        .onEnded { _ in
-                            guard holding else { return }
-                            holding = false
-                            end()
-                        })
+                    .opacity(asker.canAsk ? 1 : 0.5)
+                    .modifier(HoldToAsk(enabled: asker.canAsk, holding: $holding, begin: begin, end: end))
                     .accessibilityAddTraits(.isButton)
                     .accessibilityHint("Double-tap and hold, ask about what's in front of the camera, then let go")
             }
         }
-
-        private var enabled: Bool { asker.state == .ready || asker.state == .thinking }
 
         private var label: String {
             switch asker.state {
@@ -147,4 +113,49 @@ struct ContentView: View {
         }
     }
 
+    // The walker's view: blank, and the whole screen is the Ask button.
+    private struct UserView: View {
+        @ObservedObject var asker: Asker
+        let begin: () -> Void, end: () -> Void
+        @State private var holding = false
+
+        var body: some View {
+            Color.black.ignoresSafeArea()
+                .contentShape(Rectangle())
+                .modifier(HoldToAsk(enabled: asker.canAsk, holding: $holding, begin: begin, end: end))
+                .accessibilityElement()
+                .accessibilityLabel("Hold to ask")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityHint("Double-tap and hold anywhere, ask about what's in front of the camera, then let go")
+        }
+    }
+
+    /// Press starts listening, release asks. Not a Button: it needs touch-down and touch-up.
+    private struct HoldToAsk: ViewModifier {
+        let enabled: Bool
+        @Binding var holding: Bool
+        let begin: () -> Void, end: () -> Void
+
+        func body(content: Content) -> some View {
+            content
+                .gesture(DragGesture(minimumDistance: 0)
+                    .onChanged { _ in
+                        guard enabled, !holding else { return }
+                        holding = true
+                        begin()
+                    }
+                    .onEnded { _ in release() })
+                .onDisappear(perform: release)   // switching views mid-hold must not leave the mic on
+        }
+
+        private func release() {
+            guard holding else { return }
+            holding = false
+            end()
+        }
+    }
+}
+
+private extension Asker {
+    var canAsk: Bool { state == .ready || state == .thinking }
 }
