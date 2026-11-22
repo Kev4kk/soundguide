@@ -97,7 +97,6 @@ let trailCount = 0;
 const lastTrail = new THREE.Vector3(Infinity, 0, 0);
 
 const unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
 const leaderGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 1, 0)]);
 const boxes = new Map();   // track id -> { box, tag, leader }
 const name = o => `${o.label}_${String(o.id).padStart(2, '0')}`;
@@ -138,6 +137,8 @@ const goalPos = new THREE.Vector3(), goalQuat = new THREE.Quaternion(), aim = ne
 
 // Third person: the camera sits behind and above the phone and turns with it.
 const CHASE_BACK = 2.5, CHASE_UP = 1.3, CHASE_AHEAD = 1.5, CHASE_TURN_S = 0.4;   // metres; turn easing is slower than SMOOTH_S so the view doesn't whip round
+// Third person only: boxes inside the phone camera's view are solid, the rest fade.
+const CONE_HALF = 35 * Math.PI / 180, FADED = 0.15;   // ponytail: roughly half the phone camera's horizontal FOV; ignores pitch
 const view = document.getElementById('view');
 let goalHeading = null, heading = 0;   // radians about +y; (sin, cos) is the horizontal facing direction
 view.onchange = () => {
@@ -179,8 +180,9 @@ function apply(s) {
     seen.add(o.id);
     let b = boxes.get(o.id);
     if (!b) {
-      b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(name(o).toUpperCase()),
-            leader: new THREE.Line(leaderGeometry, boxMaterial), pos: new THREE.Vector3(), scale: new THREE.Vector3(), yaw: 0, fresh: true };
+      const mat = new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true });   // per box: each fades on its own
+      b = { box: new THREE.LineSegments(unitEdges, mat), tag: makeTag(name(o).toUpperCase()), mat, opacity: 1,
+            leader: new THREE.Line(leaderGeometry, mat), pos: new THREE.Vector3(), scale: new THREE.Vector3(), yaw: 0, fresh: true };
       b.leader.scale.y = 0.25;
       b.tag.visible = b.leader.visible = showLabels;
       scene.add(b.box, b.tag, b.leader);
@@ -196,6 +198,7 @@ function apply(s) {
     scene.remove(b.box, b.tag, b.leader);
     b.tag.material.map.dispose();
     b.tag.material.dispose();
+    b.mat.dispose();
     boxes.delete(id);
   }
 
@@ -259,6 +262,15 @@ renderer.setAnimationLoop(() => {
     const top = b.box.position.y + b.box.scale.y / 2;
     b.leader.position.set(b.box.position.x, top, b.box.position.z);
     b.tag.position.set(b.box.position.x, top + 0.25, b.box.position.z);
+    let goal = 1;
+    if (view.value === 'chase' && goalHeading != null) {
+      const dx = b.box.position.x - phone.position.x, dz = b.box.position.z - phone.position.z, d = Math.hypot(dx, dz);
+      const off = Math.abs(Math.atan2(Math.sin(Math.atan2(dx, dz) - goalHeading), Math.cos(Math.atan2(dx, dz) - goalHeading)));
+      const halfWidth = Math.atan(Math.hypot(b.box.scale.x, b.box.scale.z) / 2 / Math.max(d, 0.01));   // partly in view counts
+      goal = off - halfWidth <= CONE_HALF ? 1 : FADED;
+    }
+    b.opacity += (goal - b.opacity) * k;
+    b.mat.opacity = b.tag.material.opacity = b.opacity;
   }
   controls.update();
   renderer.render(scene, camera);
