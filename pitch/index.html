@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="et">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
@@ -15,12 +15,7 @@
                             radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.8) 100%); }
   .h { font-family: Hacked, ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; font-weight: normal; }
 
-  /* Top bar: progress + timer */
-  #bar { position: fixed; top: 0; left: 0; right: 0; z-index: 4; display: flex; justify-content: space-between; align-items: center;
-         padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; font-size: 13px; color: var(--dim); }
-  #clock { font: 22px Hacked, monospace; color: #fff; letter-spacing: .1em; cursor: pointer; }
-  #clock.over { color: var(--red); }
-  #prog { position: fixed; top: 0; left: 0; height: 2px; background: var(--cyan); z-index: 4; transition: width .3s; }
+  #bar { position: fixed; top: 0; left: 0; right: 0; z-index: 4; padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; font-size: 13px; color: var(--dim); }
   #seg { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; display: flex; gap: 3px; z-index: 4; }
   #seg i { flex: 1; background: #222; }
   #seg i.on { background: #fff; }
@@ -70,7 +65,6 @@
   #notes { position: fixed; left: 0; right: 0; bottom: 3px; z-index: 6; background: rgba(0,0,0,.92); border-top: 1px solid var(--cyan);
            padding: 12px 16px calc(env(safe-area-inset-bottom) + 12px); font-size: 15px; line-height: 1.5; color: #ddd; display: none; max-height: 45vh; overflow-y: auto; }
   body.notes #notes { display: block; }
-  #notes .t { color: var(--cyan); font: 13px Hacked, monospace; letter-spacing: .1em; }
   #ctl { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px); z-index: 7; display: flex; gap: 8px; }
   body.notes #ctl { bottom: calc(45vh + 12px); }
   #ctl button { background: rgba(0,0,0,.7); color: #fff; border: 1px solid #fff; padding: 8px 12px; font: 13px Hacked, monospace; letter-spacing: .08em; cursor: pointer; }
@@ -81,119 +75,96 @@
 </style>
 </head>
 <body>
-<div id="prog"></div>
-<div id="bar"><span class="h">SoundGuide // pitch <span id="num"></span></span><span id="clock" title="Tap to start / pause the 120 s timer">2:00</span></div>
+<div id="bar"><span class="h">SoundGuide // esitlus <span id="num"></span></span></div>
 
-<!-- data-s = seconds budgeted for this slide; total 120 -->
-<section class="slide" data-s="10">
+<section class="slide">
   <div class="sonar"><i></i><i></i><i></i></div>
-  <div class="tag h">transmission start</div>
+  <div class="tag h">edastus algab</div>
   <h1 class="h"><span class="glitch" data-t="SoundGuide">SoundGuide</span></h1>
-  <p class="sub" style="margin-top:20px">Hear the room<span class="cur"></span><br><b>3D sound that warns you before you walk into something.</b></p>
-  <aside>Picture walking into a room you've never seen, with your eyes closed. For 43 million blind people, that's every day. We built SoundGuide.</aside>
+  <p class="sub" style="margin-top:20px">Kuula ruumi<span class="cur"></span><br><b>3D-heli, mis hoiatab enne, kui millelegi otsa kõnnid.</b></p>
+  <aside>Kujuta ette, et astud silmad kinni ruumi, kus sa pole kunagi käinud. 43 miljoni pimeda inimese jaoks on see igapäevane elu. Me ehitasime SoundGuide'i.</aside>
 </section>
 
-<section class="slide" data-s="20">
-  <div class="tag h">the problem</div>
-  <div class="big">43M<small> blind worldwide</small></div>
+<section class="slide">
+  <div class="tag h">probleem</div>
+  <div class="big">43M<small> pimedat maailmas</small></div>
   <ul class="k" style="margin-top:24px">
-    <li class="x"><b>The cane</b>finds the floor, misses the table edge at hip height or the half-open door.</li>
-    <li class="x"><b>Guide dogs</b>cost tens of thousands to train and have long waitlists.</li>
-    <li class="x"><b>Indoor nav</b>needs beacons installed first, or a LiDAR iPhone Pro.</li>
+    <li class="x"><b>Valge kepp</b>leiab põranda, aga jätab märkamata puusa kõrgusel oleva lauaserva või poolavatud ukse.</li>
+    <li class="x"><b>Juhtkoerad</b>Väljaõpe maksab kümneid tuhandeid ja järjekorrad on pikad.</li>
+    <li class="x"><b>Sisenavigatsioon</b>vajab eelnevalt paigaldatud majakaid või LiDAR-iga iPhone Pro't.</li>
   </ul>
-  <aside>A cane finds what's at your feet. It misses the table edge at hip height or the door left half open. Guide dogs cost tens of thousands and have long waitlists. And most indoor navigation needs beacons installed first, or an expensive LiDAR phone.</aside>
+  <aside>Valge kepp leiab selle, mis on jalge ees. Puusa kõrgusel olev lauaserv või poolavatud uks jääb aga märkamata. Juhtkoera väljaõpe maksab kümneid tuhandeid ja järjekorrad on pikad. Enamik sisenavigatsiooni lahendusi vajab aga eelnevalt paigaldatud majakaid või kallist LiDAR-iga telefoni.</aside>
 </section>
 
-<section class="slide" data-s="20">
-  <div class="tag h">the fix</div>
-  <h2 class="h">Your iPhone becomes a sonar<span class="cur"></span></h2>
+<section class="slide">
+  <div class="tag h">lahendus</div>
+  <h2 class="h">Sinu iPhone'ist saab sonar<span class="cur"></span></h2>
   <ul class="k">
-    <li class="c"><b>Beeps speed up</b>as the way ahead closes in, like a parking sensor.</li>
-    <li class="c"><b>Buzz from the real direction</b>Spatial audio puts the warning where the obstacle actually is.</li>
-    <li class="c"><b>Zero setup</b>Any recent iPhone + headphones. No LiDAR, no beacons, no internet.</li>
+    <li class="c"><b>Piiksud kiirenevad</b>mida lähemale takistus jõuab, nagu parkimisanduril.</li>
+    <li class="c"><b>Hoiatus õigest suunast</b>Ruumiline heli kõlab sealt, kus takistus päriselt asub.</li>
+    <li class="c"><b>Null seadistust</b>Iga uuem iPhone + kõrvaklapid. Pole vaja LiDAR-it, majakaid ega internetti.</li>
   </ul>
-  <aside>SoundGuide turns any recent iPhone and a pair of headphones into a sonar. Beeps get faster as the way ahead closes in, and anything you're about to walk into buzzes from its real direction in 3D. No setup, no LiDAR, no internet.</aside>
+  <aside>SoundGuide muudab iga uuema iPhone'i ja kõrvaklapid sonariks. Mida lähemale takistus jõuab, seda kiiremini piiksub, ja kõik, millele oled otsa kõndimas, sumiseb oma päris suunast, 3D-s. Pole seadistamist, pole LiDAR-it, pole internetti.</aside>
 </section>
 
-<section class="slide" data-s="25">
-  <div class="tag h">how it works</div>
-  <h2 class="h">All on-device<span class="cur"></span></h2>
+<section class="slide">
+  <div class="tag h">kuidas see töötab</div>
+  <h2 class="h">Kõik seadmes<span class="cur"></span></h2>
   <div class="flow">
-    <div><b>01 Map</b>ARKit planes + feature points build the room as you walk.</div>
-    <div><b>02 Scan</b>An 80 cm corridor, 2 m ahead, checked 10&times; a second.</div>
-    <div><b>03 Name</b>YOLO26n on the Neural Engine labels what's there.</div>
-    <div><b>04 Place</b>HRTF spatial audio + haptics, by time to impact.</div>
-    <div><b>05 Ask</b>Hold the screen: Apple's on-device model describes the view.</div>
+    <div><b>01 Kaart</b>ARKit-i tasandid ja tunnuspunktid kaardistavad ruumi kõndimise ajal.</div>
+    <div><b>02 Skaneeri</b>80 cm laiune koridor 2 m ette, kontroll 10 korda sekundis.</div>
+    <div><b>03 Tuvasta</b>YOLO26n Neural Engine'il tunneb ära, mis ees on.</div>
+    <div><b>04 Paiguta</b>HRTF ruumiline heli + haptika, ajastatud kokkupõrkeni jääva aja järgi.</div>
+    <div><b>05 Küsi</b>Hoia ekraani: Apple'i seadmesisene mudel kirjeldab, mida kaamera näeb.</div>
   </div>
-  <aside>Under the hood: ARKit maps planes and feature points as you walk. We check an 80-centimetre corridor two metres ahead, ten times a second. YOLO on the Neural Engine names what's there. HRTF spatial audio and haptics place each warning where the object is, timed by time to impact. And if you want more, hold the screen and ask Apple's on-device model what the camera sees.</aside>
+  <aside>Kapoti all kaardistab ARKit kõndimise ajal tasandeid ja tunnuspunkte. Kontrollime 80 sentimeetri laiust koridori kaks meetrit ettepoole, kümme korda sekundis. YOLO tuvastab Neural Engine'il, mis ees on. HRTF ruumiline heli ja haptika paigutavad iga hoiatuse sinna, kus objekt asub, ajastatuna selle järgi, kui palju aega kokkupõrkeni jääb. Ja kui tahad rohkem teada, hoia ekraani ja küsi Apple'i seadmesiseselt mudelilt, mida kaamera näeb.</aside>
 </section>
 
-<section class="slide" data-s="30">
+<section class="slide">
   <div class="sonar"><i></i><i></i><i></i></div>
-  <div class="tag h">live</div>
+  <div class="tag h">otse</div>
   <h1 class="h"><span class="glitch" data-t="Demo">Demo</span><span class="cur"></span></h1>
-  <p class="sub" style="margin-top:20px"><b>Blindfolded walk.</b> Listen for the beeps.<br>Laptop: the live 3D map the phone is building.</p>
-  <aside>[LIVE] Walker puts on headphones and blindfold, walks toward the chair. Point out: beeps speed up, buzz comes from the left. Then hold to ask: "What's in front of me?" Gesture at the laptop's 3D live map.</aside>
+  <p class="sub" style="margin-top:20px"><b>Kõndimine silmad kinni.</b> Kuula piikse.<br>Sülearvutis: reaalajas 3D-kaart, mida telefon ehitab.</p>
+  <aside>[OTSE] Kõndija paneb pähe kõrvaklapid ja silmasideme ning kõnnib tooli poole. Näita: piiksud kiirenevad, sumin tuleb vasakult. Siis hoia ekraani ja küsi: „Mis on mu ees?” Näita sülearvutis reaalajas 3D-kaarti.</aside>
 </section>
 
-<section class="slide" data-s="15">
-  <div class="tag h">next</div>
-  <h2 class="h">Hear the room<span class="cur"></span></h2>
+<section class="slide">
+  <div class="tag h">edasi</div>
+  <h2 class="h">Kuula ruumi<span class="cur"></span></h2>
   <ul class="k">
-    <li><b>Test with blind users</b>Tune warnings with the people who'll rely on them.</li>
-    <li><b>Hands-free</b>Chest-strap mode + AirPods head tracking.</li>
+    <li><b>Testime pimedatega</b>Häälestame hoiatused koos inimestega, kes neile toetuvad.</li>
+    <li><b>Käed vabad</b>Rinnarihma režiim + AirPodsi peajälgimine.</li>
   </ul>
-  <p class="fine">Hackathon demo, not a mobility aid. Keep the cane.</p>
-  <aside>Next: test with blind users and tune it with them, then a chest-strap mode with AirPods head tracking so your hands stay free. SoundGuide: hear the room. Thank you.</aside>
+  <p class="fine">Häkatoni demo, mitte liikumisabivahend. Hoia kepp alles.</p>
+  <aside>Järgmiseks testime pimedate kasutajatega ja häälestame hoiatused koos nendega. Siis tuleb rinnarihma režiim koos AirPodsi peajälgimisega, et käed jääksid vabaks. SoundGuide: kuula ruumi. Aitäh.</aside>
 </section>
 
 <div id="seg"></div>
-<div id="notes" role="region" aria-label="Speaker notes"></div>
-<div id="ctl"><button id="nbtn" aria-pressed="false">Notes</button><button id="abtn" aria-pressed="false">Auto</button></div>
+<div id="notes" role="region" aria-label="Esineja märkmed"></div>
+<div id="ctl"><button id="nbtn" aria-pressed="false">Märkmed</button></div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
 
 <script>
 const slides = [...document.querySelectorAll('.slide')];
-const budget = slides.map(s => +s.dataset.s);
-const starts = budget.map((_, i) => budget.slice(0, i).reduce((a, b) => a + b, 0));
-const TOTAL = budget.reduce((a, b) => a + b, 0);
 const $ = id => document.getElementById(id);
 $('seg').innerHTML = slides.map(() => '<i></i>').join('');
 const segs = [...$('seg').children];
-let cur = 0, elapsed = 0, running = false, last = 0, auto = false;
+let cur = 0;
 
 function show(i) {
   cur = Math.max(0, Math.min(slides.length - 1, i));
   slides.forEach((s, j) => s.classList.toggle('active', j === cur));
   segs.forEach((s, j) => { s.className = j < cur ? 'on' : j === cur ? 'now' : ''; });
   $('num').textContent = `${cur + 1}/${slides.length}`;
-  const a = slides[cur].querySelector('aside');
-  $('notes').innerHTML = `<div class="t">${starts[cur]}–${starts[cur] + budget[cur]}s · ${budget[cur]}s</div>${a ? a.innerHTML : ''}`;
+  $('notes').innerHTML = slides[cur].querySelector('aside')?.innerHTML ?? '';
   location.hash = cur + 1;
 }
-function fmt(t) { const s = Math.abs(Math.round(t)); return (t < 0 ? '+' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
-function tick(now) {
-  if (running) {
-    elapsed += (now - last) / 1000;
-    if (auto) { const i = starts.findLastIndex(s => elapsed >= s); if (i !== cur && i < slides.length) show(i); }
-  }
-  last = now;
-  $('clock').textContent = fmt(TOTAL - elapsed);
-  $('clock').classList.toggle('over', elapsed > TOTAL);
-  $('prog').style.width = Math.min(100, elapsed / TOTAL * 100) + '%';
-  requestAnimationFrame(tick);
-}
-function toggleRun() { running = !running; }
-$('clock').onclick = toggleRun;
 $('nbtn').onclick = e => { e.stopPropagation(); const on = document.body.classList.toggle('notes'); $('nbtn').setAttribute('aria-pressed', on); };
-$('abtn').onclick = e => { e.stopPropagation(); auto = !auto; $('abtn').setAttribute('aria-pressed', auto); if (auto) { elapsed = starts[cur]; running = true; } };
 
 addEventListener('keydown', e => {
-  if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); if (!running && cur === 0 && elapsed === 0) running = true; show(cur + 1); }
+  if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(cur + 1); }
   else if (['ArrowLeft', 'PageUp'].includes(e.key)) show(cur - 1);
   else if (e.key === 'n') $('nbtn').click();
-  else if (e.key === 't') toggleRun();
-  else if (e.key === 'r') { elapsed = 0; running = false; show(0); }
 });
 // Tap right two thirds = next, left third = back. Swipe works too.
 let x0 = null;
@@ -204,11 +175,10 @@ addEventListener('touchend', e => {
   if (Math.abs(dx) > 50) show(cur + (dx < 0 ? 1 : -1));
 });
 addEventListener('click', e => {
-  if (e.target.closest('#ctl, #clock, #notes, a')) return;
-  if (e.clientX < innerWidth / 3) show(cur - 1); else { if (!running && cur === 0 && elapsed === 0) running = true; show(cur + 1); }
+  if (e.target.closest('#ctl, #notes, a')) return;
+  show(cur + (e.clientX < innerWidth / 3 ? -1 : 1));
 });
 show((+location.hash.slice(1) || 1) - 1);
-requestAnimationFrame(t => { last = t; tick(t); });
 </script>
 </body>
 </html>
