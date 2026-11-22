@@ -5,9 +5,26 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>SoundGuide 3D</title>
 <style>
-  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
-  #hud { position: fixed; top: 10px; left: 12px; }
-  #hud label { margin-left: 12px; }
+  html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
+               font: 12px ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  /* Scanlines and a vignette over the canvas. */
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
+                background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
+                            radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75) 100%); }
+  .panel { position: fixed; left: 16px; padding: 10px 14px; background: rgba(0,0,0,.55);
+           border-left: 2px solid #fff; z-index: 1; }
+  #hud { top: 16px; }
+  #hud b { display: block; font-size: 14px; letter-spacing: .2em; }
+  #hud b::after { content: "_"; animation: blink 1s steps(1) infinite; }
+  #hud label { display: block; margin-top: 6px; color: #9a9a9a; cursor: pointer; }
+  #hud input { accent-color: #fff; vertical-align: -2px; }
+  #status { color: #5fd4ff; }
+  #list { bottom: 16px; min-width: 200px; margin: 0; list-style: none; color: #9a9a9a; }
+  #list:empty { display: none; }
+  #list li { display: flex; justify-content: space-between; gap: 24px; line-height: 1.7; }
+  #list li span:first-child { color: #fff; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #hud b::after { animation: none; } }
 </style>
 <script type="importmap">
 { "imports": {
@@ -17,7 +34,8 @@
 </script>
 </head>
 <body>
-<div id="hud"><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label></div>
+<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label></div>
+<ul id="list" class="panel" aria-label="Detected objects"></ul>
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -39,10 +57,10 @@ function resize() {
 addEventListener('resize', resize);
 resize();
 
-const grid = new THREE.GridHelper(40, 40, 0x555555, 0x2a2a2a);
+const grid = new THREE.GridHelper(40, 40, 0x3a3a3a, 0x161616);
 scene.add(grid);
 
-const cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x66ccff, size: 0.03 }));
+const cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.55 }));
 cloud.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3));
 cloud.geometry.setDrawRange(0, 0);
 cloud.frustumCulled = false;   // the bounding sphere is never recomputed
@@ -50,10 +68,10 @@ scene.add(cloud);
 
 // Cone tip along +z, which is the axis Object3D.lookAt aims at the target.
 const phone = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 16).rotateX(Math.PI / 2),
-                             new THREE.MeshBasicMaterial({ color: 0x44ff88 }));
+                             new THREE.MeshBasicMaterial({ color: 0x5fd4ff, wireframe: true }));
 scene.add(phone);
 
-const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x44ff88 }));
+const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x5fd4ff, transparent: true, opacity: 0.6 }));
 trail.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
 trail.geometry.setDrawRange(0, 0);
 trail.frustumCulled = false;
@@ -62,20 +80,29 @@ let trailCount = 0;
 const lastTrail = new THREE.Vector3(Infinity, 0, 0);
 
 const unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
-const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffd60a });
-const boxes = new Map();   // track id -> { box, tag }
+const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+const leaderGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 1, 0)]);
+const boxes = new Map();   // track id -> { box, tag, leader }
+const name = o => `${o.label}_${String(o.id).padStart(2, '0')}`;
 
 function makeTag(text) {
+  const font = '600 30px ui-monospace, Menlo, Consolas, monospace';
   const canvas = document.createElement('canvas');
-  canvas.width = 256; canvas.height = 64;
-  const g = canvas.getContext('2d');
-  g.font = '40px system-ui, sans-serif';
-  g.textAlign = 'center';
+  let g = canvas.getContext('2d');
+  g.font = font;
+  canvas.width = Math.ceil(g.measureText(text).width) + 28;   // resizing resets the context
+  canvas.height = 48;
+  g = canvas.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, canvas.width, 48);
+  g.font = font;
   g.textBaseline = 'middle';
-  g.fillStyle = '#ffd60a';
-  g.fillText(text, 128, 32);
-  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
-  tag.scale.set(0.6, 0.15, 1);
+  g.fillStyle = '#000';
+  g.fillText(text, 14, 25);
+  // Constant size on screen, so far-away tags stay readable.
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, sizeAttenuation: false }));
+  tag.center.set(0, 0);   // anchor the plate's bottom-left corner on top of the leader line
+  tag.scale.set(0.03 * canvas.width / 48, 0.03, 1);
   return tag;
 }
 
@@ -111,34 +138,45 @@ function apply(s) {
     seen.add(o.id);
     let b = boxes.get(o.id);
     if (!b) {
-      b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(o.label) };
-      scene.add(b.box, b.tag);
+      b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(name(o).toUpperCase()),
+            leader: new THREE.Line(leaderGeometry, boxMaterial) };
+      scene.add(b.box, b.tag, b.leader);
       boxes.set(o.id, b);
     }
     const [lo, hi] = o.y;
     b.box.position.set(o.c[0], (lo + hi) / 2, o.c[1]);
     b.box.rotation.y = o.yaw;
     b.box.scale.set(o.half[0] * 2, hi - lo, o.half[1] * 2);
-    b.tag.position.set(o.c[0], hi + 0.12, o.c[1]);
+    b.leader.position.set(o.c[0], hi, o.c[1]);
+    b.leader.scale.y = 0.25;
+    b.tag.position.set(o.c[0], hi + 0.25, o.c[1]);
   }
   for (const [id, b] of boxes) {
     if (seen.has(id)) continue;
-    scene.remove(b.box, b.tag);
+    scene.remove(b.box, b.tag, b.leader);
     b.tag.material.map.dispose();
     b.tag.material.dispose();
     boxes.delete(id);
   }
 
   const count = s.objects.length;
-  status.textContent = `${count} object${count === 1 ? '' : 's'}, ${n / 3} points`;
+  status.textContent = `${count} object${count === 1 ? '' : 's'} // ${n / 3} points`;
+  const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
+  list.replaceChildren(...rows.map(([label, d]) => {
+    const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
+    a.textContent = label;
+    b.textContent = d.toFixed(1) + ' m';
+    li.append(a, b);
+    return li;
+  }));
 }
 
-const status = document.getElementById('status');
+const status = document.getElementById('status'), list = document.getElementById('list');
 async function poll() {
   try {
     apply(await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json());
   } catch {
-    status.textContent = 'No connection to the phone. Keep SoundGuide open and on the same Wi-Fi.';
+    status.textContent = 'Signal lost. Keep SoundGuide open and on the same Wi-Fi.';
   }
   setTimeout(poll, POLL_MS);
 }
