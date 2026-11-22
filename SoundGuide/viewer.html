@@ -8,6 +8,9 @@
   html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
                font: 15px Hacked, ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
   @font-face { font-family: Hacked; src: url(/hacked.ttf) format("truetype"); font-display: swap; }
+  /* Heading-up minimap, like the app's Map view. */
+  #mini { position: fixed; right: 16px; top: 16px; z-index: 1; width: min(240px, 38vw); aspect-ratio: 1; padding: 0;
+          background: rgba(0,0,0,.6); border-left: 2px solid #fff; }
   #credit { position: fixed; right: 12px; bottom: 8px; z-index: 1; color: #6a6a6a; font: 10px ui-monospace, Menlo, monospace; text-transform: none; letter-spacing: 0; }
   #credit a { color: inherit; }
   /* Scanlines and a vignette over the canvas. */
@@ -53,6 +56,7 @@
 </select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
 <div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
 </div>
+<canvas id="mini" aria-hidden="true"></canvas>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
 <script type="module">
 import * as THREE from 'three';
@@ -258,6 +262,45 @@ function apply(s) {
 
 const status = document.getElementById('status');
 
+// Same projection as the app's MapFrame: the way you face is up, you sit 68% down, 7 m across.
+const mini = document.getElementById('mini'), mctx = mini.getContext('2d'), MINI_M = 7;
+function drawMini(s, me, fwd) {
+  const dpr = devicePixelRatio || 1, w = mini.clientWidth, h = mini.clientHeight;
+  if (mini.width !== Math.round(w * dpr)) { mini.width = Math.round(w * dpr); mini.height = Math.round(h * dpr); }
+  const g = mctx, ppm = Math.min(w, h) / MINI_M, ax = w / 2, ay = h * 0.68;
+  g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  g.clearRect(0, 0, w, h);
+  const n = Math.hypot(fwd[0], fwd[2]) || 1, fx = fwd[0] / n, fz = fwd[2] / n;   // right = (-fz, fx)
+  const screen = (x, z) => { const dx = x - me[0], dz = z - me[2]; return [ax + (-fz * dx + fx * dz) * ppm, ay - (fx * dx + fz * dz) * ppm]; };
+  const poly = (pts, fill) => {
+    g.beginPath();
+    pts.forEach(([x, z], i) => { const [px, py] = screen(x, z); i ? g.lineTo(px, py) : g.moveTo(px, py); });
+    g.closePath(); g.fillStyle = fill; g.fill();
+  };
+  g.setLineDash([4, 4]); g.strokeStyle = 'rgba(255,255,255,.25)'; g.fillStyle = 'rgba(255,255,255,.5)';
+  g.font = '10px ui-monospace, Menlo, monospace';
+  for (const r of [1, 2]) {
+    g.beginPath(); g.arc(ax, ay, r * ppm, 0, 2 * Math.PI); g.stroke();
+    g.fillText(`${r} m`, ax + 8, ay - r * ppm + 12);
+  }
+  g.setLineDash([]);
+  for (const c of s.walls ?? []) poly([[c[0], c[1]], [c[2], c[3]], [c[4], c[5]], [c[6], c[7]]], 'rgba(255,149,0,.55)');
+  for (const o of s.objects) {
+    // Same box the 3D view draws: local x = (cos yaw, -sin yaw), local z = (sin yaw, cos yaw).
+    const cy = Math.cos(o.yaw), sy = Math.sin(o.yaw), [hx, hz] = o.half;
+    poly([[1, 1], [-1, 1], [-1, -1], [1, -1]].map(([a, b]) =>
+      [o.c[0] + a * hx * cy + b * hz * sy, o.c[1] - a * hx * sy + b * hz * cy]), 'rgba(255,204,0,.55)');
+  }
+  if (s.range != null) {   // where the beeps say the way ahead is blocked
+    g.strokeStyle = '#ff3b30'; g.lineWidth = 5; g.lineCap = 'round';
+    g.beginPath(); g.moveTo(ax - 0.3 * ppm, ay - s.range * ppm); g.lineTo(ax + 0.3 * ppm, ay - s.range * ppm); g.stroke();
+    g.lineWidth = 1;
+  }
+  g.beginPath(); g.moveTo(ax, ay - 22); g.lineTo(ax - 9, ay + 4); g.lineTo(ax + 9, ay + 4); g.closePath();
+  g.fillStyle = '#fff'; g.fill();
+  g.beginPath(); g.arc(ax, ay, 7, 0, 2 * Math.PI); g.fillStyle = '#0a84ff'; g.fill();
+}
+
 // Hold to ask, mirrored: the question as heard, the answer as it streams, and (with Sound on) the same lines
 // spoken in the browser's own voice as the phone says them.
 const askPanel = document.getElementById('ask'), askState = document.getElementById('ask-state');
@@ -282,6 +325,7 @@ async function poll() {
     if (s.head) { s.cam = s.head.slice(0, 3); s.fwd = s.head.slice(3); }
     range = s.range ?? null;
     showAsk(s.ask);
+    if (s.cam) drawMini(s, s.cam, s.fwd);
     apply(s);
   } catch {
     range = null;   // never beep from a stale reading
