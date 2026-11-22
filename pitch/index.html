@@ -1,0 +1,214 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>SoundGuide // pitch</title>
+<style>
+  @font-face { font-family: Hacked; src: url(../SoundGuide/hacked.ttf) format("truetype"); font-display: swap; }
+  :root { --cyan: #5fd4ff; --red: #ff3b3b; --dim: #8a8a8a; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
+               font: 16px ui-monospace, "SF Mono", Menlo, Consolas, monospace; }
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none; z-index: 5;
+                background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
+                            radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.8) 100%); }
+  .h { font-family: Hacked, ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; font-weight: normal; }
+
+  /* Top bar: progress + timer */
+  #bar { position: fixed; top: 0; left: 0; right: 0; z-index: 4; display: flex; justify-content: space-between; align-items: center;
+         padding: calc(env(safe-area-inset-top) + 10px) 16px 10px; font-size: 13px; color: var(--dim); }
+  #clock { font: 22px Hacked, monospace; color: #fff; letter-spacing: .1em; cursor: pointer; }
+  #clock.over { color: var(--red); }
+  #prog { position: fixed; top: 0; left: 0; height: 2px; background: var(--cyan); z-index: 4; transition: width .3s; }
+  #seg { position: fixed; left: 0; right: 0; bottom: 0; height: 3px; display: flex; gap: 3px; z-index: 4; }
+  #seg i { flex: 1; background: #222; }
+  #seg i.on { background: #fff; }
+  #seg i.now { background: var(--cyan); }
+
+  .slide { position: fixed; inset: 0; display: none; flex-direction: column; justify-content: center;
+           padding: calc(env(safe-area-inset-top) + 64px) clamp(20px, 7vw, 120px) calc(env(safe-area-inset-bottom) + 80px); }
+  .slide.active { display: flex; animation: in .35s steps(4); }
+  @keyframes in { from { opacity: 0; transform: translateX(8px); clip-path: inset(0 0 60% 0); } to { opacity: 1; } }
+
+  .tag { color: var(--cyan); font-size: 13px; letter-spacing: .2em; margin-bottom: 14px; }
+  .tag::before { content: "// "; }
+  h1 { font-size: clamp(48px, 13vw, 150px); line-height: .95; margin: 0; }
+  h2 { font-size: clamp(30px, 7vw, 72px); line-height: 1.05; margin: 0 0 24px; }
+  h1 .cur::after, h2 .cur::after { content: "_"; animation: blink 1s steps(1) infinite; }
+  .glitch { position: relative; display: inline-block; }
+  .glitch::before, .glitch::after { content: attr(data-t); position: absolute; inset: 0; pointer-events: none; }
+  .glitch::before { color: var(--cyan); animation: g1 2.8s infinite steps(1); }
+  .glitch::after { color: var(--red); animation: g2 3.4s infinite steps(1); }
+  @keyframes g1 { 0%, 92%, 100% { clip-path: inset(100% 0 0 0); } 93% { clip-path: inset(20% 0 55% 0); transform: translate(-4px, 0); } 96% { clip-path: inset(70% 0 5% 0); transform: translate(3px, 0); } }
+  @keyframes g2 { 0%, 88%, 100% { clip-path: inset(100% 0 0 0); } 89% { clip-path: inset(50% 0 30% 0); transform: translate(4px, 0); } 91% { clip-path: inset(5% 0 80% 0); transform: translate(-3px, 0); } }
+  @keyframes blink { 50% { opacity: 0; } }
+
+  .sub { font-size: clamp(17px, 3.6vw, 26px); color: #cfcfcf; max-width: 34em; line-height: 1.45; }
+  .sub b { color: #fff; }
+  .big { font: clamp(64px, 18vw, 180px) Hacked, monospace; color: #fff; line-height: 1; }
+  .big small { font-size: .3em; color: var(--dim); }
+  ul.k { list-style: none; padding: 0; margin: 0; display: grid; gap: 14px; max-width: 40em; }
+  ul.k li { border-left: 2px solid #fff; padding: 6px 14px; background: rgba(255,255,255,.03); font-size: clamp(16px, 3.4vw, 22px); line-height: 1.35; }
+  ul.k li.x { border-color: var(--red); }
+  ul.k li.c { border-color: var(--cyan); }
+  ul.k li b { font-family: Hacked, monospace; font-weight: normal; letter-spacing: .06em; text-transform: uppercase; display: block; font-size: .85em; color: #fff; margin-bottom: 2px; }
+  .flow { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; max-width: 70em; }
+  .flow div { border: 1px solid #333; padding: 12px; position: relative; font-size: clamp(14px, 3vw, 17px); line-height: 1.4; color: #bbb; }
+  .flow div b { font: 18px Hacked, monospace; color: var(--cyan); display: block; letter-spacing: .06em; margin-bottom: 6px; text-transform: uppercase; }
+  .slide aside { display: none; }
+  .fine { margin-top: 22px; color: var(--dim); font-size: 13px; }
+
+  /* sonar rings on title + demo */
+  .sonar { position: absolute; right: 8vw; top: 50%; width: 40vmin; height: 40vmin; transform: translateY(-50%); pointer-events: none; opacity: .6; }
+  .sonar i { position: absolute; inset: 0; border: 1px solid var(--cyan); border-radius: 50%; animation: ping 2.4s linear infinite; }
+  .sonar i:nth-child(2) { animation-delay: .8s; } .sonar i:nth-child(3) { animation-delay: 1.6s; }
+  @keyframes ping { from { transform: scale(.1); opacity: 1; } to { transform: scale(1); opacity: 0; } }
+  @media (max-width: 700px) { .sonar { right: -10vmin; top: 22%; opacity: .35; } }
+
+  /* speaker notes */
+  #notes { position: fixed; left: 0; right: 0; bottom: 3px; z-index: 6; background: rgba(0,0,0,.92); border-top: 1px solid var(--cyan);
+           padding: 12px 16px calc(env(safe-area-inset-bottom) + 12px); font-size: 15px; line-height: 1.5; color: #ddd; display: none; max-height: 45vh; overflow-y: auto; }
+  body.notes #notes { display: block; }
+  #notes .t { color: var(--cyan); font: 13px Hacked, monospace; letter-spacing: .1em; }
+  #ctl { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px); z-index: 7; display: flex; gap: 8px; }
+  body.notes #ctl { bottom: calc(45vh + 12px); }
+  #ctl button { background: rgba(0,0,0,.7); color: #fff; border: 1px solid #fff; padding: 8px 12px; font: 13px Hacked, monospace; letter-spacing: .08em; cursor: pointer; }
+  #ctl button[aria-pressed="true"] { background: #fff; color: #000; }
+  #credit { position: fixed; left: 12px; bottom: calc(env(safe-area-inset-bottom) + 10px); z-index: 4; color: #555; font-size: 10px; }
+  #credit a { color: inherit; }
+  @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
+</style>
+</head>
+<body>
+<div id="prog"></div>
+<div id="bar"><span class="h">SoundGuide // pitch <span id="num"></span></span><span id="clock" title="Tap to start / pause the 120 s timer">2:00</span></div>
+
+<!-- data-s = seconds budgeted for this slide; total 120 -->
+<section class="slide" data-s="10">
+  <div class="sonar"><i></i><i></i><i></i></div>
+  <div class="tag h">transmission start</div>
+  <h1 class="h"><span class="glitch" data-t="SoundGuide">SoundGuide</span></h1>
+  <p class="sub" style="margin-top:20px">Hear the room<span class="cur"></span><br><b>3D sound that warns you before you walk into something.</b></p>
+  <aside>Picture walking into a room you've never seen, with your eyes closed. For 43 million blind people, that's every day. We built SoundGuide.</aside>
+</section>
+
+<section class="slide" data-s="20">
+  <div class="tag h">the problem</div>
+  <div class="big">43M<small> blind worldwide</small></div>
+  <ul class="k" style="margin-top:24px">
+    <li class="x"><b>The cane</b>finds the floor, misses the table edge at hip height or the half-open door.</li>
+    <li class="x"><b>Guide dogs</b>cost tens of thousands to train and have long waitlists.</li>
+    <li class="x"><b>Indoor nav</b>needs beacons installed first, or a LiDAR iPhone Pro.</li>
+  </ul>
+  <aside>A cane finds what's at your feet. It misses the table edge at hip height or the door left half open. Guide dogs cost tens of thousands and have long waitlists. And most indoor navigation needs beacons installed first, or an expensive LiDAR phone.</aside>
+</section>
+
+<section class="slide" data-s="20">
+  <div class="tag h">the fix</div>
+  <h2 class="h">Your iPhone becomes a sonar<span class="cur"></span></h2>
+  <ul class="k">
+    <li class="c"><b>Beeps speed up</b>as the way ahead closes in, like a parking sensor.</li>
+    <li class="c"><b>Buzz from the real direction</b>Spatial audio puts the warning where the obstacle actually is.</li>
+    <li class="c"><b>Zero setup</b>Any recent iPhone + headphones. No LiDAR, no beacons, no internet.</li>
+  </ul>
+  <aside>SoundGuide turns any recent iPhone and a pair of headphones into a sonar. Beeps get faster as the way ahead closes in, and anything you're about to walk into buzzes from its real direction in 3D. No setup, no LiDAR, no internet.</aside>
+</section>
+
+<section class="slide" data-s="25">
+  <div class="tag h">how it works</div>
+  <h2 class="h">All on-device<span class="cur"></span></h2>
+  <div class="flow">
+    <div><b>01 Map</b>ARKit planes + feature points build the room as you walk.</div>
+    <div><b>02 Scan</b>An 80 cm corridor, 2 m ahead, checked 10&times; a second.</div>
+    <div><b>03 Name</b>YOLO26n on the Neural Engine labels what's there.</div>
+    <div><b>04 Place</b>HRTF spatial audio + haptics, by time to impact.</div>
+    <div><b>05 Ask</b>Hold the screen: Apple's on-device model describes the view.</div>
+  </div>
+  <aside>Under the hood: ARKit maps planes and feature points as you walk. We check an 80-centimetre corridor two metres ahead, ten times a second. YOLO on the Neural Engine names what's there. HRTF spatial audio and haptics place each warning where the object is, timed by time to impact. And if you want more, hold the screen and ask Apple's on-device model what the camera sees.</aside>
+</section>
+
+<section class="slide" data-s="30">
+  <div class="sonar"><i></i><i></i><i></i></div>
+  <div class="tag h">live</div>
+  <h1 class="h"><span class="glitch" data-t="Demo">Demo</span><span class="cur"></span></h1>
+  <p class="sub" style="margin-top:20px"><b>Blindfolded walk.</b> Listen for the beeps.<br>Laptop: the live 3D map the phone is building.</p>
+  <aside>[LIVE] Walker puts on headphones and blindfold, walks toward the chair. Point out: beeps speed up, buzz comes from the left. Then hold to ask: "What's in front of me?" Gesture at the laptop's 3D live map.</aside>
+</section>
+
+<section class="slide" data-s="15">
+  <div class="tag h">next</div>
+  <h2 class="h">Hear the room<span class="cur"></span></h2>
+  <ul class="k">
+    <li><b>Test with blind users</b>Tune warnings with the people who'll rely on them.</li>
+    <li><b>Hands-free</b>Chest-strap mode + AirPods head tracking.</li>
+  </ul>
+  <p class="fine">Hackathon demo, not a mobility aid. Keep the cane.</p>
+  <aside>Next: test with blind users and tune it with them, then a chest-strap mode with AirPods head tracking so your hands stay free. SoundGuide: hear the room. Thank you.</aside>
+</section>
+
+<div id="seg"></div>
+<div id="notes" role="region" aria-label="Speaker notes"></div>
+<div id="ctl"><button id="nbtn" aria-pressed="false">Notes</button><button id="abtn" aria-pressed="false">Auto</button></div>
+<div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
+
+<script>
+const slides = [...document.querySelectorAll('.slide')];
+const budget = slides.map(s => +s.dataset.s);
+const starts = budget.map((_, i) => budget.slice(0, i).reduce((a, b) => a + b, 0));
+const TOTAL = budget.reduce((a, b) => a + b, 0);
+const $ = id => document.getElementById(id);
+$('seg').innerHTML = slides.map(() => '<i></i>').join('');
+const segs = [...$('seg').children];
+let cur = 0, elapsed = 0, running = false, last = 0, auto = false;
+
+function show(i) {
+  cur = Math.max(0, Math.min(slides.length - 1, i));
+  slides.forEach((s, j) => s.classList.toggle('active', j === cur));
+  segs.forEach((s, j) => { s.className = j < cur ? 'on' : j === cur ? 'now' : ''; });
+  $('num').textContent = `${cur + 1}/${slides.length}`;
+  const a = slides[cur].querySelector('aside');
+  $('notes').innerHTML = `<div class="t">${starts[cur]}–${starts[cur] + budget[cur]}s · ${budget[cur]}s</div>${a ? a.innerHTML : ''}`;
+  location.hash = cur + 1;
+}
+function fmt(t) { const s = Math.abs(Math.round(t)); return (t < 0 ? '+' : '') + Math.floor(s / 60) + ':' + String(s % 60).padStart(2, '0'); }
+function tick(now) {
+  if (running) {
+    elapsed += (now - last) / 1000;
+    if (auto) { const i = starts.findLastIndex(s => elapsed >= s); if (i !== cur && i < slides.length) show(i); }
+  }
+  last = now;
+  $('clock').textContent = fmt(TOTAL - elapsed);
+  $('clock').classList.toggle('over', elapsed > TOTAL);
+  $('prog').style.width = Math.min(100, elapsed / TOTAL * 100) + '%';
+  requestAnimationFrame(tick);
+}
+function toggleRun() { running = !running; }
+$('clock').onclick = toggleRun;
+$('nbtn').onclick = e => { e.stopPropagation(); const on = document.body.classList.toggle('notes'); $('nbtn').setAttribute('aria-pressed', on); };
+$('abtn').onclick = e => { e.stopPropagation(); auto = !auto; $('abtn').setAttribute('aria-pressed', auto); if (auto) { elapsed = starts[cur]; running = true; } };
+
+addEventListener('keydown', e => {
+  if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); if (!running && cur === 0 && elapsed === 0) running = true; show(cur + 1); }
+  else if (['ArrowLeft', 'PageUp'].includes(e.key)) show(cur - 1);
+  else if (e.key === 'n') $('nbtn').click();
+  else if (e.key === 't') toggleRun();
+  else if (e.key === 'r') { elapsed = 0; running = false; show(0); }
+});
+// Tap right two thirds = next, left third = back. Swipe works too.
+let x0 = null;
+addEventListener('touchstart', e => { x0 = e.touches[0].clientX; }, { passive: true });
+addEventListener('touchend', e => {
+  if (x0 === null) return;
+  const dx = e.changedTouches[0].clientX - x0; x0 = null;
+  if (Math.abs(dx) > 50) show(cur + (dx < 0 ? 1 : -1));
+});
+addEventListener('click', e => {
+  if (e.target.closest('#ctl, #clock, #notes, a')) return;
+  if (e.clientX < innerWidth / 3) show(cur - 1); else { if (!running && cur === 0 && elapsed === 0) running = true; show(cur + 1); }
+});
+show((+location.hash.slice(1) || 1) - 1);
+requestAnimationFrame(t => { last = t; tick(t); });
+</script>
+</body>
+</html>
