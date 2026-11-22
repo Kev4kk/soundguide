@@ -11,8 +11,6 @@
   /* Heading-up minimap, like the app's Map view. */
   #mini { position: fixed; right: 16px; top: 16px; z-index: 1; width: min(240px, 38vw); aspect-ratio: 1; padding: 0;
           background: rgba(0,0,0,.6); border-left: 2px solid #fff; }
-  #credit { position: fixed; right: 12px; bottom: 8px; z-index: 1; color: #6a6a6a; font: 10px ui-monospace, Menlo, monospace; text-transform: none; letter-spacing: 0; }
-  #credit a { color: inherit; }
   /* Scanlines and a vignette over the canvas. */
   body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
                 background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
@@ -57,7 +55,7 @@
 <div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
 </div>
 <canvas id="mini" aria-hidden="true"></canvas>
-<div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
+<!-- Font: HACKED by David Libeau, http://bit.ly/WatchDogsFont (CC-BY credit; see LICENSES/HACKED-font.md) -->
 <script type="module">
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
