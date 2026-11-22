@@ -7,7 +7,10 @@ struct Tuning {
     var maxElevationDegrees: Float = 35
     // Phone is held at chest; ears sit above it. Calibration knob, varies per person.
     var earHeightAbovePhone: Float = 0.3
-    var stopPulseInterval: Double = 0.15   // strong haptic repeat rate for "stop"
+    var stopPulseInterval: Double = 0.3    // repeat rate of the triple "stop" buzz
+    // Live range (phone to what's ahead), only while walking.
+    var rangeBumpDistance: Float = 1.2     // metres: "about to bump" taps
+    var rangeStopDistance: Float = 0.65    // metres: "stop" buzz
     var useHeadTracking = true
     // Flip to -1 if turning your head left makes sounds swing the wrong way.
     var headYawSign: Float = 1
@@ -51,10 +54,18 @@ struct Tuning {
     var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
 }
 
-enum Haptic: Equatable {
+enum Haptic: Comparable {
     case none
-    case slowDown(interval: Double)   // light taps, faster as you get closer
-    case stop                         // strong rapid pulses
+    case slowDown(interval: Double)   // "about to bump": medium taps, faster as you get closer
+    case stop                         // "stop now": repeated triple error buzz
+
+    /// none < slowDown (slower before faster) < stop, so `max` picks the more urgent.
+    static func < (a: Haptic, b: Haptic) -> Bool {
+        func rank(_ h: Haptic) -> Double {
+            switch h { case .none: return 0; case .slowDown(let i): return 1 + 1 / (1 + i); case .stop: return 3 }
+        }
+        return rank(a) < rank(b)
+    }
 }
 
 /// What the obstacle buzz and haptics should do this frame.
@@ -128,6 +139,12 @@ enum Guidance {
         }
         for t in stride(from: dt, through: horizon, by: dt) where o.distance(to: p + v * t) < clearance { return t }
         return nil
+    }
+
+    /// Haptic from the live range. Standing still never vibrates; the beeps still say how close it is.
+    static func rangeHaptic(distance d: Float, speed: Float, tuning t: Tuning) -> Haptic {
+        guard speed >= t.minWarnSpeed else { return .none }
+        return d <= t.rangeStopDistance ? .stop : d <= t.rangeBumpDistance ? .slowDown(interval: 0.45) : .none
     }
 
     /// Buzz from the obstacle you'd reach soonest at your current walking velocity.

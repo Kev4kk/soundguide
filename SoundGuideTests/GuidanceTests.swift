@@ -63,6 +63,16 @@ final class GuidanceTests: XCTestCase {
         XCTAssertGreaterThan(now.volume, soon.volume)
     }
 
+    func testRangeHapticAndUrgency() {
+        XCTAssertEqual(Guidance.rangeHaptic(distance: 0.4, speed: 0, tuning: t), .none)   // standing by a wall
+        XCTAssertEqual(Guidance.rangeHaptic(distance: 0.4, speed: 1, tuning: t), .stop)
+        XCTAssertEqual(Guidance.rangeHaptic(distance: 1, speed: 1, tuning: t), .slowDown(interval: 0.45))
+        XCTAssertEqual(Guidance.rangeHaptic(distance: 1.8, speed: 1, tuning: t), .none)
+        XCTAssertEqual(max(Haptic.slowDown(interval: 0.45), .stop), .stop)
+        XCTAssertEqual(max(Haptic.slowDown(interval: 0.45), .slowDown(interval: 0.12)), .slowDown(interval: 0.12))
+        XCTAssertEqual(max(Haptic.none, .slowDown(interval: 0.5)), .slowDown(interval: 0.5))
+    }
+
     func testVelocity() {
         var v = VelocityTracker()
         for i in 0...5 { v.add([0, -Float(i) * 0.1], now: Double(i) * 0.1, window: t.velocityWindow) }

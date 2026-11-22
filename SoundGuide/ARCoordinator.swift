@@ -79,9 +79,10 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var headRef: (phoneYaw: Float, headYaw: Double)?
     private var motion = VelocityTracker()
     private var lastHaptic: TimeInterval = 0
+    private var lastHapticWasStop = false
+    private var rangeHaptic = Haptic.none
     private let tap = UIImpactFeedbackGenerator(style: .medium)
-    private let light = UIImpactFeedbackGenerator(style: .light)
-    private let warn = UIImpactFeedbackGenerator(style: .heavy)
+    private let stopBuzz = UINotificationFeedbackGenerator()
     private var pointMap = PointMap()
     private var ignoredPlanes = Set<UUID>()
     private var lastBuild: TimeInterval = 0
@@ -345,6 +346,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         liveRange = LiveRange()
         beepTiming = ProximityBeepTiming()
         lastRangeHit = -.infinity
+        rangeHaptic = .none
         proximityStatus = "Distance not established"
     }
 
@@ -375,17 +377,17 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         guard let d = liveRange.clearance(points: cloud?.points ?? [], ids: cloud?.identifiers ?? [], shot: shot,
                                            floor: classifiedFloor, plane: wall, now: now) else {
             if now - lastRangeHit > 0.4 {
+                rangeHaptic = .none
                 if proximityStatus != "Distance not established" { proximityStatus = "Distance not established" }
             }
             return
         }
         lastRangeHit = now
         rangeDistance = d
-        let band = d <= 0.65 ? 0 : d <= 1.2 ? 1 : 2
         let distance = max(0.25, (d * 4).rounded() / 4)
         let message = String(format: "Obstacle ahead, about %g %@", Double(distance), distance == 1 ? "meter" : "meters")
         if proximityStatus != message { proximityStatus = message }
-        vibrate(band == 0 ? .stop : .slowDown(interval: band == 1 ? 0.45 : 0.85), now: now)
+        rangeHaptic = Guidance.rangeHaptic(distance: d, speed: simd_length(motion.velocity), tuning: tuning)
         if beepTiming.shouldBeep(distance: d, now: now) { audio.playProximityBeep() }
     }
 
@@ -418,7 +420,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
         motion.add(xz(ear), now: frame.timestamp, window: tuning.velocityWindow)
         let w = Guidance.warning(listener: ear, velocity: motion.velocity, obstacles: navigationObstacles, tuning: tuning)
-        vibrate(w.haptic, now: frame.timestamp)
+        vibrate(max(w.haptic, rangeHaptic), now: frame.timestamp)   // one source at a time: the more urgent
         audio.update(listener: ear, forward: forward, warning: w, now: frame.timestamp)
 
         if frame.timestamp - lastMapUpdate > 0.1 {   // ~10 Hz is plenty for a map
@@ -450,13 +452,16 @@ extension ARController {
     /// Throttled off the frame clock, like the audio pings.
     fileprivate func vibrate(_ haptic: Haptic, now: TimeInterval) {
         switch haptic {
-        case .none: return
+        case .none: lastHapticWasStop = false; return
         case .slowDown(let interval):
             guard now - lastHaptic >= interval else { return }
-            light.impactOccurred(intensity: 0.7)
+            tap.impactOccurred(intensity: 0.8)
+            lastHapticWasStop = false
         case .stop:
-            guard now - lastHaptic >= tuning.stopPulseInterval else { return }
-            warn.impactOccurred(intensity: 1)
+            // Entering stop fires at once; don't wait out a slow tap's interval.
+            guard !lastHapticWasStop || now - lastHaptic >= tuning.stopPulseInterval else { return }
+            stopBuzz.notificationOccurred(.error)
+            lastHapticWasStop = true
         }
         lastHaptic = now
     }
