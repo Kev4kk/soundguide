@@ -17,9 +17,11 @@ struct WorldSnapshot: Encodable, Equatable {
     let floorY: Float?
     let objects: [Object]
     let points: [Int32]     // x, y, z triples in millimetres: a third the JSON of floats
+    let range: Float?       // forward clearance the phone is beeping for, nil when it is silent
 
     init(camera: SIMD3<Float>, forward: SIMD3<Float>, floorY: Float?,
-         objects: [(id: Int, label: String, obstacle: Obstacle)], points: [SIMD3<Float>]) {
+         objects: [(id: Int, label: String, obstacle: Obstacle)], points: [SIMD3<Float>], range: Float? = nil) {
+        self.range = range
         cam = [camera.x, camera.y, camera.z]
         fwd = [forward.x, forward.y, forward.z]
         self.floorY = floorY

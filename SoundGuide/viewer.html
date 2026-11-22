@@ -49,7 +49,7 @@
   <option value="free">Free</option>
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
-</select></label><button id="labels" aria-pressed="false">Labels: off</button></div>
+</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Beeps: off</button></div>
 <ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
@@ -130,6 +130,35 @@ labelsButton.onclick = () => {
   labelsButton.textContent = `Labels: ${showLabels ? 'on' : 'off'}`;
   for (const b of boxes.values()) b.tag.visible = b.leader.visible = showLabels;
 };
+
+// Same proximity beep as the app (ProximityBeepTiming + SpatialAudio.proximityTone): 520 Hz, 65 ms.
+// Arrives a poll (~200 ms) late. Off by default; the click also unlocks browser audio.
+let audio = null, range = null, lastBeep = -Infinity;
+const beepsButton = document.getElementById('beeps');
+beepsButton.onclick = () => {
+  audio = audio ? (audio.close(), null) : new AudioContext();
+  lastBeep = -Infinity;   // each AudioContext's clock starts at 0
+  beepsButton.setAttribute('aria-pressed', !!audio);
+  beepsButton.textContent = `Beeps: ${audio ? 'on' : 'off'}`;
+};
+function beepTick() {
+  if (audio && range > 0 && range <= 2) {
+    const interval = range <= 0.65 ? 0.2 : range <= 1.2 ? 0.45 : 0.85, t = audio.currentTime;
+    if (t - lastBeep >= interval) {
+      lastBeep = t;
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = 520;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(0.6, t + 0.005);
+      g.gain.setValueAtTime(0.6, t + 0.06);
+      g.gain.linearRampToValueAtTime(0, t + 0.065);
+      o.connect(g).connect(audio.destination);
+      o.start(t); o.stop(t + 0.07);
+    }
+  }
+  setTimeout(beepTick, 20);
+}
+beepTick();
 
 // Snapshots arrive at 5 Hz. They only set goals; every rendered frame eases towards them.
 const SMOOTH_S = 0.15;   // time constant: smaller is snappier, larger is smoother but further behind
@@ -218,8 +247,11 @@ function apply(s) {
 const status = document.getElementById('status'), list = document.getElementById('list');
 async function poll() {
   try {
-    apply(await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json());
+    const s = await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json();
+    range = s.range ?? null;
+    apply(s);
   } catch {
+    range = null;   // never beep from a stale reading
     status.textContent = 'Signal lost. Keep SoundGuide open and on the same Wi-Fi.';
   }
   setTimeout(poll, POLL_MS);

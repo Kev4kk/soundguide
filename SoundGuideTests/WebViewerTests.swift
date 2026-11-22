@@ -8,6 +8,10 @@ final class WebViewerTests: XCTestCase {
                                      objects: [(id: 7, label: "chair", obstacle: chair)], points: [[0.0015, -1, 2.25]])
         let json = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(snapshot)) as? [String: Any])
         XCTAssertEqual(json["cam"] as? [Double], [0, 0.5, 0])
+        XCTAssertNil(json["range"])   // silent phone: the browser must not beep
+        let beeping = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [], points: [], range: 0.5)
+        let beepJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(beeping)) as? [String: Any])
+        XCTAssertEqual(beepJSON["range"] as? Double, 0.5)
         XCTAssertEqual(json["points"] as? [Int], [2, -1000, 2250])
         let o = try XCTUnwrap((json["objects"] as? [[String: Any]])?.first)
         XCTAssertEqual(o["id"] as? Int, 7)
