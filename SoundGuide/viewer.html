@@ -57,7 +57,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-const MAX_TRAIL = 5000, POLL_MS = 200, TILE_M = 0.5;
+const MAX_TRAIL = 5000, POLL_MS = 100, TILE_M = 0.5;
 
 const renderer = new THREE.WebGLRenderer({ antialias: true });
 renderer.setPixelRatio(devicePixelRatio);
@@ -143,7 +143,7 @@ labelsButton.onclick = () => {
   for (const b of boxes.values()) b.tag.visible = b.leader.visible = showLabels;
 };
 
-// The app's proximity beep (ProximityBeepTiming + SpatialAudio.proximityTone: 520 Hz, 65 ms), a poll (~200 ms) late.
+// The app's proximity beep (ProximityBeepTiming + SpatialAudio.proximityTone: 520 Hz, 65 ms), a poll (~100 ms) late.
 // Off by default; the click also unlocks browser audio. No buzz: with the phone also playing, it sounded doubled.
 let audio = null, range = null, lastBeep = -Infinity;
 const beepsButton = document.getElementById('beeps');
@@ -178,7 +178,7 @@ function soundTick() {
 }
 beepTick();
 
-// Snapshots arrive at 5 Hz. They only set goals; every rendered frame eases towards them.
+// Snapshots arrive at 10 Hz. They only set goals; every rendered frame eases towards them.
 const SMOOTH_S = 0.15;   // time constant: smaller is snappier, larger is smoother but further behind
 const goalPos = new THREE.Vector3(), goalQuat = new THREE.Quaternion(), aim = new THREE.Object3D();
 

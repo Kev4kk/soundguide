@@ -227,7 +227,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     }
 
     private func publishWorld(_ frame: ARFrame) {
-        guard web.watched, frame.timestamp - lastWebUpdate >= 0.2 else { return }
+        guard web.watched, frame.timestamp - lastWebUpdate >= 0.1 else { return }
         if !trackingNormal { lastHead = nil }   // skipped below then, so it would go stale
         lastWebUpdate = frame.timestamp
         let m = frame.camera.transform
