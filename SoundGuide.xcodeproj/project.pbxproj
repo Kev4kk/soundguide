@@ -7,13 +7,16 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		107D46817CF0BA8EF8F8684A /* viewer.html in Resources */ = {isa = PBXBuildFile; fileRef = 09415357BB82E6BB704E38E2 /* viewer.html */; };
 		14B5F8AA1C6D193FCA2DADA3 /* YOLO26n.mlpackage in Sources */ = {isa = PBXBuildFile; fileRef = AF8BFF828D420D587D862BF4 /* YOLO26n.mlpackage */; };
 		377AF2AE23FA0018848830F2 /* GuidanceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */; };
 		45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */ = {isa = PBXBuildFile; fileRef = 14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */; };
+		6544DC526ABDF90316FC9326 /* WebViewer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BCD744D20692AD22047621F /* WebViewer.swift */; };
 		73F7C6D38A0FEA94ACDAC412 /* DetectionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = CF6FB714CDEBF64393A2B3C1 /* DetectionTests.swift */; };
 		78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */ = {isa = PBXBuildFile; fileRef = 65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */; };
 		81A4A4CB43B2C008EFCBE772 /* GuideMapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */; };
 		83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 418FA0E1AAA825730B274295 /* SoundGuideApp.swift */; };
+		88FEF34EE7A9A8C11ED045CE /* WebViewerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 0C6C6C41CF36C6C983DA0623 /* WebViewerTests.swift */; };
 		98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9DCF756858D75E950D24A515 /* HeadTracker.swift */; };
 		A533E65627AEB52FA3A7FFB6 /* ARCoordinator.swift in Sources */ = {isa = PBXBuildFile; fileRef = DF488ECCAEEBB8C05CA83908 /* ARCoordinator.swift */; };
 		ABC279B326B57FC102AE9AEF /* Ask.swift in Sources */ = {isa = PBXBuildFile; fileRef = 3992B2C58232471B418262F6 /* Ask.swift */; };
@@ -35,12 +38,15 @@
 
 /* Begin PBXFileReference section */
 		05FC900B1A040F27B9D5DFFE /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = Info.plist; sourceTree = "<group>"; };
+		09415357BB82E6BB704E38E2 /* viewer.html */ = {isa = PBXFileReference; lastKnownFileType = text.html; path = viewer.html; sourceTree = "<group>"; };
+		0C6C6C41CF36C6C983DA0623 /* WebViewerTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewerTests.swift; sourceTree = "<group>"; };
 		14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SpatialAudio.swift; sourceTree = "<group>"; };
 		2F17C30671A9032BDD3BEFEC /* GuideMapView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuideMapView.swift; sourceTree = "<group>"; };
 		3992B2C58232471B418262F6 /* Ask.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Ask.swift; sourceTree = "<group>"; };
 		418FA0E1AAA825730B274295 /* SoundGuideApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SoundGuideApp.swift; sourceTree = "<group>"; };
 		45C29884A245E36004313953 /* SoundGuide.app */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.application; path = SoundGuide.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		65B02CD75B5CAD8A47CAEF04 /* Guidance.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = Guidance.swift; sourceTree = "<group>"; };
+		7BCD744D20692AD22047621F /* WebViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewer.swift; sourceTree = "<group>"; };
 		8C6B9AC20D46DEF1E3A01F6D /* SoundGuideTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SoundGuideTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DCF756858D75E950D24A515 /* HeadTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadTracker.swift; sourceTree = "<group>"; };
 		A69F4C99C93D21040FD12441 /* PathPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathPlanner.swift; sourceTree = "<group>"; };
@@ -69,6 +75,7 @@
 				CF6FB714CDEBF64393A2B3C1 /* DetectionTests.swift */,
 				AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */,
 				B6FF426373D561CD3FF951AE /* SentencesTests.swift */,
+				0C6C6C41CF36C6C983DA0623 /* WebViewerTests.swift */,
 			);
 			path = SoundGuideTests;
 			sourceTree = "<group>";
@@ -96,6 +103,8 @@
 				A69F4C99C93D21040FD12441 /* PathPlanner.swift */,
 				418FA0E1AAA825730B274295 /* SoundGuideApp.swift */,
 				14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */,
+				09415357BB82E6BB704E38E2 /* viewer.html */,
+				7BCD744D20692AD22047621F /* WebViewer.swift */,
 				AF8BFF828D420D587D862BF4 /* YOLO26n.mlpackage */,
 			);
 			path = SoundGuide;
@@ -127,6 +136,7 @@
 			buildConfigurationList = 344778E13CCD3E7297699B1C /* Build configuration list for PBXNativeTarget "SoundGuide" */;
 			buildPhases = (
 				E94DB1E8A93480814598B23A /* Sources */,
+				DECF635EB0CF61DE616C001F /* Resources */,
 			);
 			buildRules = (
 			);
@@ -178,6 +188,17 @@
 		};
 /* End PBXProject section */
 
+/* Begin PBXResourcesBuildPhase section */
+		DECF635EB0CF61DE616C001F /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				107D46817CF0BA8EF8F8684A /* viewer.html in Resources */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
 /* Begin PBXSourcesBuildPhase section */
 		CF93985BD90CA98AE2373F81 /* Sources */ = {
 			isa = PBXSourcesBuildPhase;
@@ -186,6 +207,7 @@
 				73F7C6D38A0FEA94ACDAC412 /* DetectionTests.swift in Sources */,
 				377AF2AE23FA0018848830F2 /* GuidanceTests.swift in Sources */,
 				D717EF3FF449266193D432A4 /* SentencesTests.swift in Sources */,
+				88FEF34EE7A9A8C11ED045CE /* WebViewerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -203,6 +225,7 @@
 				FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */,
 				83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */,
 				45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */,
+				6544DC526ABDF90316FC9326 /* WebViewer.swift in Sources */,
 				14B5F8AA1C6D193FCA2DADA3 /* YOLO26n.mlpackage in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;

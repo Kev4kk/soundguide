@@ -21,6 +21,7 @@ struct ContentView: View {
             if ar.autoDetect { Text(ar.proximityStatus).font(.subheadline).padding(4).background(.thinMaterial) }
             if !ar.status.isEmpty { Text(ar.status).font(.subheadline).padding(4).background(.thinMaterial) }
             headphoneStatus
+            if let url = ar.webURL { Text("3D view: \(url)").font(.caption).padding(4).background(.thinMaterial) }
             Spacer()
             Image(systemName: "plus").font(.system(size: 36, weight: .light))
                 .foregroundStyle(.white).shadow(radius: 2)

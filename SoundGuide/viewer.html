@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoundGuide 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #111; color: #ddd; font: 14px system-ui, sans-serif; overflow: hidden; }
+  #hud { position: fixed; top: 10px; left: 12px; }
+  #hud label { margin-left: 12px; }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="hud"><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MAX_POINTS = 5000, MAX_TRAIL = 5000, POLL_MS = 200;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 200);
+camera.position.set(0, 3, 4);
+const controls = new OrbitControls(camera, renderer.domElement);
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const grid = new THREE.GridHelper(40, 40, 0x555555, 0x2a2a2a);
+scene.add(grid);
+
+const cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0x66ccff, size: 0.03 }));
+cloud.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3));
+cloud.geometry.setDrawRange(0, 0);
+cloud.frustumCulled = false;   // the bounding sphere is never recomputed
+scene.add(cloud);
+
+// Cone tip along +z, which is the axis Object3D.lookAt aims at the target.
+const phone = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 16).rotateX(Math.PI / 2),
+                             new THREE.MeshBasicMaterial({ color: 0x44ff88 }));
+scene.add(phone);
+
+const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x44ff88 }));
+trail.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
+trail.geometry.setDrawRange(0, 0);
+trail.frustumCulled = false;
+scene.add(trail);
+let trailCount = 0;
+const lastTrail = new THREE.Vector3(Infinity, 0, 0);
+
+const unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffd60a });
+const boxes = new Map();   // track id -> { box, tag }
+
+function makeTag(text) {
+  const canvas = document.createElement('canvas');
+  canvas.width = 256; canvas.height = 64;
+  const g = canvas.getContext('2d');
+  g.font = '40px system-ui, sans-serif';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.fillStyle = '#ffd60a';
+  g.fillText(text, 128, 32);
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false }));
+  tag.scale.set(0.6, 0.15, 1);
+  return tag;
+}
+
+let started = false;
+function apply(s) {
+  if (!s.cam) return;   // the app has not published a frame yet
+  const p = new THREE.Vector3(...s.cam);
+  if (!started || document.getElementById('follow').checked) {
+    const delta = started ? p.clone().sub(phone.position) : p.clone().sub(controls.target);
+    camera.position.add(delta);
+    controls.target.add(delta);
+    started = true;
+  }
+  phone.position.copy(p);
+  phone.lookAt(p.clone().add(new THREE.Vector3(...s.fwd)));
+
+  if (p.distanceTo(lastTrail) > 0.05 && trailCount < MAX_TRAIL) {
+    trail.geometry.attributes.position.setXYZ(trailCount++, p.x, p.y, p.z);
+    trail.geometry.attributes.position.needsUpdate = true;
+    trail.geometry.setDrawRange(0, trailCount);
+    lastTrail.copy(p);
+  }
+
+  if (s.floorY != null) grid.position.y = s.floorY;
+
+  const n = Math.min(s.points.length, MAX_POINTS * 3), pos = cloud.geometry.attributes.position;
+  for (let i = 0; i < n; i++) pos.array[i] = s.points[i] / 1000;
+  pos.needsUpdate = true;
+  cloud.geometry.setDrawRange(0, n / 3);
+
+  const seen = new Set();
+  for (const o of s.objects) {
+    seen.add(o.id);
+    let b = boxes.get(o.id);
+    if (!b) {
+      b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(o.label) };
+      scene.add(b.box, b.tag);
+      boxes.set(o.id, b);
+    }
+    const [lo, hi] = o.y;
+    b.box.position.set(o.c[0], (lo + hi) / 2, o.c[1]);
+    b.box.rotation.y = o.yaw;
+    b.box.scale.set(o.half[0] * 2, hi - lo, o.half[1] * 2);
+    b.tag.position.set(o.c[0], hi + 0.12, o.c[1]);
+  }
+  for (const [id, b] of boxes) {
+    if (seen.has(id)) continue;
+    scene.remove(b.box, b.tag);
+    b.tag.material.map.dispose();
+    b.tag.material.dispose();
+    boxes.delete(id);
+  }
+
+  const count = s.objects.length;
+  status.textContent = `${count} object${count === 1 ? '' : 's'}, ${n / 3} points`;
+}
+
+const status = document.getElementById('status');
+async function poll() {
+  try {
+    apply(await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json());
+  } catch {
+    status.textContent = 'No connection to the phone. Keep SoundGuide open and on the same Wi-Fi.';
+  }
+  setTimeout(poll, POLL_MS);
+}
+poll();
+
+renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+</script>
+</body>
+</html>
