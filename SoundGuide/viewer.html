@@ -18,6 +18,10 @@
   #hud b::after { content: "_"; animation: blink 1s steps(1) infinite; }
   #hud label { display: block; margin-top: 6px; color: #9a9a9a; cursor: pointer; }
   #hud input { accent-color: #fff; vertical-align: -2px; }
+  #hud button { display: block; margin-top: 8px; padding: 4px 10px; background: none; color: #fff; border: 1px solid #fff;
+                font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+  #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
+  #hud button[aria-pressed="false"] { color: #9a9a9a; border-color: #9a9a9a; }
   #status { color: #5fd4ff; }
   #list { bottom: 16px; min-width: 200px; margin: 0; list-style: none; color: #9a9a9a; }
   #list:empty { display: none; }
@@ -34,7 +38,7 @@
 </script>
 </head>
 <body>
-<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label></div>
+<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label><button id="labels" aria-pressed="true">Labels: on</button></div>
 <ul id="list" class="panel" aria-label="Detected objects"></ul>
 <script type="module">
 import * as THREE from 'three';
@@ -106,24 +110,33 @@ function makeTag(text) {
   return tag;
 }
 
+let showLabels = true;
+const labelsButton = document.getElementById('labels');
+labelsButton.onclick = () => {
+  showLabels = !showLabels;
+  labelsButton.setAttribute('aria-pressed', showLabels);
+  labelsButton.textContent = `Labels: ${showLabels ? 'on' : 'off'}`;
+  for (const b of boxes.values()) b.tag.visible = b.leader.visible = showLabels;
+};
+
+// Snapshots arrive at 5 Hz. They only set goals; every rendered frame eases towards them.
+const SMOOTH_S = 0.15;   // time constant: smaller is snappier, larger is smoother but further behind
+const goalPos = new THREE.Vector3(), goalQuat = new THREE.Quaternion(), aim = new THREE.Object3D();
 let started = false;
 function apply(s) {
   if (!s.cam) return;   // the app has not published a frame yet
   const p = new THREE.Vector3(...s.cam);
-  if (!started || document.getElementById('follow').checked) {
-    const delta = started ? p.clone().sub(phone.position) : p.clone().sub(controls.target);
+  aim.position.copy(p);
+  aim.lookAt(p.clone().add(new THREE.Vector3(...s.fwd)));
+  goalPos.copy(p);
+  goalQuat.copy(aim.quaternion);
+  if (!started) {
+    started = true;
+    phone.position.copy(p);
+    phone.quaternion.copy(goalQuat);
+    const delta = p.clone().sub(controls.target);
     camera.position.add(delta);
     controls.target.add(delta);
-    started = true;
-  }
-  phone.position.copy(p);
-  phone.lookAt(p.clone().add(new THREE.Vector3(...s.fwd)));
-
-  if (p.distanceTo(lastTrail) > 0.05 && trailCount < MAX_TRAIL) {
-    trail.geometry.attributes.position.setXYZ(trailCount++, p.x, p.y, p.z);
-    trail.geometry.attributes.position.needsUpdate = true;
-    trail.geometry.setDrawRange(0, trailCount);
-    lastTrail.copy(p);
   }
 
   if (s.floorY != null) grid.position.y = s.floorY;
@@ -139,17 +152,16 @@ function apply(s) {
     let b = boxes.get(o.id);
     if (!b) {
       b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(name(o).toUpperCase()),
-            leader: new THREE.Line(leaderGeometry, boxMaterial) };
+            leader: new THREE.Line(leaderGeometry, boxMaterial), pos: new THREE.Vector3(), scale: new THREE.Vector3(), yaw: 0, fresh: true };
+      b.leader.scale.y = 0.25;
+      b.tag.visible = b.leader.visible = showLabels;
       scene.add(b.box, b.tag, b.leader);
       boxes.set(o.id, b);
     }
     const [lo, hi] = o.y;
-    b.box.position.set(o.c[0], (lo + hi) / 2, o.c[1]);
-    b.box.rotation.y = o.yaw;
-    b.box.scale.set(o.half[0] * 2, hi - lo, o.half[1] * 2);
-    b.leader.position.set(o.c[0], hi, o.c[1]);
-    b.leader.scale.y = 0.25;
-    b.tag.position.set(o.c[0], hi + 0.25, o.c[1]);
+    b.pos.set(o.c[0], (lo + hi) / 2, o.c[1]);
+    b.scale.set(o.half[0] * 2, hi - lo, o.half[1] * 2);
+    b.yaw = o.yaw;
   }
   for (const [id, b] of boxes) {
     if (seen.has(id)) continue;
@@ -182,7 +194,41 @@ async function poll() {
 }
 poll();
 
-renderer.setAnimationLoop(() => { controls.update(); renderer.render(scene, camera); });
+const clock = new THREE.Clock(), before = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  // Frame-rate independent exponential easing; a background tab's long frame just snaps.
+  const k = 1 - Math.exp(-Math.min(clock.getDelta(), 1) / SMOOTH_S);
+  if (started) {
+    before.copy(phone.position);
+    phone.position.lerp(goalPos, k);
+    phone.quaternion.slerp(goalQuat, k);
+    if (document.getElementById('follow').checked) {
+      before.subVectors(phone.position, before);
+      camera.position.add(before);
+      controls.target.add(before);
+    }
+    const p = phone.position;
+    if (p.distanceTo(lastTrail) > 0.05 && trailCount < MAX_TRAIL) {
+      trail.geometry.attributes.position.setXYZ(trailCount++, p.x, p.y, p.z);
+      trail.geometry.attributes.position.needsUpdate = true;
+      trail.geometry.setDrawRange(0, trailCount);
+      lastTrail.copy(p);
+    }
+  }
+  for (const b of boxes.values()) {
+    const kb = b.fresh ? 1 : k;   // a new box appears in place instead of flying in from the origin
+    b.fresh = false;
+    b.box.position.lerp(b.pos, kb);
+    b.box.scale.lerp(b.scale, kb);
+    // Shortest way round, so a yaw crossing ±π doesn't spin the box a full turn.
+    b.box.rotation.y += Math.atan2(Math.sin(b.yaw - b.box.rotation.y), Math.cos(b.yaw - b.box.rotation.y)) * kb;
+    const top = b.box.position.y + b.box.scale.y / 2;
+    b.leader.position.set(b.box.position.x, top, b.box.position.z);
+    b.tag.position.set(b.box.position.x, top + 0.25, b.box.position.z);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
 </script>
 </body>
 </html>
