@@ -175,13 +175,14 @@ function beep(t, ctx = audio) {
   o.start(t); o.stop(t + 0.07);
 }
 
-// 5 s of an obstacle closing in from 2 m to 0.2 m, beeped exactly as the app would. Works with Sound off too.
-const DEMO_S = 5, demoButton = document.getElementById('demo');
+// 5 s of an obstacle closing in from 2 m to 0.2 m, then HOLD_S more at 0.2 m (fastest beeps), beeped exactly as
+// the app would. Works with Sound off too.
+const DEMO_S = 5, HOLD_S = 2, demoButton = document.getElementById('demo');
 demoButton.onclick = () => {
   const ctx = audio ?? new AudioContext(), start = ctx.currentTime + 0.05;
-  for (let t = 0; t < DEMO_S; t += beepInterval(2 - 1.8 * t / DEMO_S)) beep(start + t, ctx);
+  for (let t = 0; t < DEMO_S + HOLD_S; t += beepInterval(Math.max(0.2, 2 - 1.8 * t / DEMO_S))) beep(start + t, ctx);
   demoButton.disabled = true;
-  setTimeout(() => { demoButton.disabled = false; if (ctx !== audio) ctx.close(); }, (DEMO_S + 0.3) * 1000);
+  setTimeout(() => { demoButton.disabled = false; if (ctx !== audio) ctx.close(); }, (DEMO_S + HOLD_S + 0.3) * 1000);
 };
 function beepTick() {
   try { soundTick(); } finally { setTimeout(beepTick, 20); }   // one bad frame must not stop the loop for good
