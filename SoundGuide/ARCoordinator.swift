@@ -70,6 +70,9 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var detected: [Detected] = []
 
     private let audio = SpatialAudio()
+    private let web = WebViewer()
+    private var lastWebUpdate: TimeInterval = 0
+    var webURLs: [String] { WebViewer.addresses.map { "http://\($0):\(WebViewer.port)" } }
     lazy var asker = Asker { [weak self] in self?.audio.say($0, interrupt: false) }
     private let head = HeadTracker()
     // Phone heading and AirPods yaw captured together; assumes you face along the phone at that moment.
@@ -106,6 +109,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         arView.session.run(config)
 
         if tuning.useHeadTracking { head.start() }
+        web.start()
         UIApplication.shared.isIdleTimerDisabled = true   // the walker never touches the screen to keep it awake
         audio.start()
         asker.prepare()
@@ -218,6 +222,17 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 self.setDetected(self.detected.filter { $0.source != .object } + self.trackedObjects)
             }
         }
+    }
+
+    private func publishWorld(_ frame: ARFrame) {
+        guard web.watched, frame.timestamp - lastWebUpdate >= 0.2 else { return }
+        lastWebUpdate = frame.timestamp
+        let m = frame.camera.transform
+        let p = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
+        let live = autoDetect && trackingNormal   // otherwise the tracks and points are stale
+        web.publish(WorldSnapshot(camera: p, forward: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z), floorY: floorY,
+                                  objects: live ? tracks.confirmed(tuning: tuning) : [],
+                                  points: live ? pointMap.nearest(5000, to: p) : []))
     }
 
     /// One shared cube mesh drawn in wireframe, not twelve render entities per box.
@@ -392,6 +407,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             if normal { checkClearance(frame); detect(frame) } // Metric mapping still requires a trustworthy pose.
             runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
         }
+        publishWorld(frame)
 
         guard normal else { return }   // never warn from a stale pose
 

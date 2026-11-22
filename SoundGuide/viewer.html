@@ -1,0 +1,268 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoundGuide 3D</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #000; color: #e8e8e8; overflow: hidden;
+               font: 15px Hacked, ui-monospace, "SF Mono", Menlo, Consolas, monospace; text-transform: uppercase; letter-spacing: .08em; }
+  @font-face { font-family: Hacked; src: url(/hacked.ttf) format("truetype"); font-display: swap; }
+  #credit { position: fixed; right: 12px; bottom: 8px; z-index: 1; color: #6a6a6a; font: 10px ui-monospace, Menlo, monospace; text-transform: none; letter-spacing: 0; }
+  #credit a { color: inherit; }
+  /* Scanlines and a vignette over the canvas. */
+  body::after { content: ""; position: fixed; inset: 0; pointer-events: none;
+                background: repeating-linear-gradient(0deg, rgba(255,255,255,.035) 0 1px, transparent 1px 3px),
+                            radial-gradient(ellipse at center, transparent 55%, rgba(0,0,0,.75) 100%); }
+  /* One column, so a long object list scrolls instead of growing over the controls. */
+  #side { position: fixed; left: 16px; top: 16px; bottom: 16px; z-index: 1; display: flex; flex-direction: column;
+          justify-content: space-between; align-items: flex-start; gap: 16px; pointer-events: none; }
+  .panel { padding: 10px 14px; background: rgba(0,0,0,.55); border-left: 2px solid #fff; pointer-events: auto; }
+  #hud { flex: none; }
+  #hud b { display: block; font-size: 22px; letter-spacing: .12em; }
+  #hud b::after { content: "_"; animation: blink 1s steps(1) infinite; }
+  #hud label { display: block; margin-top: 6px; color: #9a9a9a; cursor: pointer; }
+  #hud select { background: #000; color: #fff; border: 1px solid #9a9a9a; padding: 2px 4px;
+                font: inherit; text-transform: inherit; letter-spacing: inherit; }
+  #hud button { display: block; margin-top: 8px; padding: 4px 10px; background: none; color: #fff; border: 1px solid #fff;
+                font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
+  #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
+  #hud button[aria-pressed="false"] { color: #9a9a9a; border-color: #9a9a9a; }
+  #status { color: #5fd4ff; }
+  #list { min-width: 200px; min-height: 0; overflow-y: auto; margin: 0; list-style: none; color: #9a9a9a; scrollbar-width: thin; scrollbar-color: #9a9a9a transparent; }
+  #list:empty { display: none; }
+  #list li { display: flex; justify-content: space-between; gap: 24px; line-height: 1.7; }
+  #list li span:first-child { color: #fff; }
+  @keyframes blink { 50% { opacity: 0; } }
+  @media (prefers-reduced-motion: reduce) { #hud b::after { animation: none; } }
+</style>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.160.0/examples/jsm/"
+} }
+</script>
+</head>
+<body>
+<div id="side">
+<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label>Camera <select id="view">
+  <option value="free">Free</option>
+  <option value="follow" selected>Follow</option>
+  <option value="chase">Third person</option>
+</select></label><button id="labels" aria-pressed="true">Labels: on</button></div>
+<ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
+</div>
+<div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+
+const MAX_POINTS = 5000, MAX_TRAIL = 5000, POLL_MS = 200;
+
+const renderer = new THREE.WebGLRenderer({ antialias: true });
+renderer.setPixelRatio(devicePixelRatio);
+document.body.appendChild(renderer.domElement);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.05, 200);
+camera.position.set(0, 3, 4);
+const controls = new OrbitControls(camera, renderer.domElement);
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize);
+resize();
+
+const grid = new THREE.GridHelper(40, 40, 0x3a3a3a, 0x161616);
+scene.add(grid);
+
+const cloud = new THREE.Points(new THREE.BufferGeometry(), new THREE.PointsMaterial({ color: 0xffffff, size: 0.02, transparent: true, opacity: 0.55 }));
+cloud.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_POINTS * 3), 3));
+cloud.geometry.setDrawRange(0, 0);
+cloud.frustumCulled = false;   // the bounding sphere is never recomputed
+scene.add(cloud);
+
+// Cone tip along +z, which is the axis Object3D.lookAt aims at the target.
+const phone = new THREE.Mesh(new THREE.ConeGeometry(0.08, 0.25, 16).rotateX(Math.PI / 2),
+                             new THREE.MeshBasicMaterial({ color: 0x5fd4ff, wireframe: true }));
+scene.add(phone);
+
+const trail = new THREE.Line(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color: 0x5fd4ff, transparent: true, opacity: 0.6 }));
+trail.geometry.setAttribute('position', new THREE.BufferAttribute(new Float32Array(MAX_TRAIL * 3), 3));
+trail.geometry.setDrawRange(0, 0);
+trail.frustumCulled = false;
+scene.add(trail);
+let trailCount = 0;
+const lastTrail = new THREE.Vector3(Infinity, 0, 0);
+
+const unitEdges = new THREE.EdgesGeometry(new THREE.BoxGeometry(1, 1, 1));
+const boxMaterial = new THREE.LineBasicMaterial({ color: 0xffffff });
+const leaderGeometry = new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3(0, 1, 0)]);
+const boxes = new Map();   // track id -> { box, tag, leader }
+const name = o => `${o.label}_${String(o.id).padStart(2, '0')}`;
+
+function makeTag(text) {
+  const font = '34px Hacked, ui-monospace, Menlo, Consolas, monospace';
+  const canvas = document.createElement('canvas');
+  let g = canvas.getContext('2d');
+  g.font = font;
+  canvas.width = Math.ceil(g.measureText(text).width) + 28;   // resizing resets the context
+  canvas.height = 48;
+  g = canvas.getContext('2d');
+  g.fillStyle = '#fff';
+  g.fillRect(0, 0, canvas.width, 48);
+  g.font = font;
+  g.textBaseline = 'middle';
+  g.fillStyle = '#000';
+  g.fillText(text, 14, 25);
+  // Constant size on screen, so far-away tags stay readable.
+  const tag = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(canvas), depthTest: false, sizeAttenuation: false }));
+  tag.center.set(0, 0);   // anchor the plate's bottom-left corner on top of the leader line
+  tag.scale.set(0.03 * canvas.width / 48, 0.03, 1);
+  return tag;
+}
+
+let showLabels = true;
+const labelsButton = document.getElementById('labels');
+labelsButton.onclick = () => {
+  showLabels = !showLabels;
+  labelsButton.setAttribute('aria-pressed', showLabels);
+  labelsButton.textContent = `Labels: ${showLabels ? 'on' : 'off'}`;
+  for (const b of boxes.values()) b.tag.visible = b.leader.visible = showLabels;
+};
+
+// Snapshots arrive at 5 Hz. They only set goals; every rendered frame eases towards them.
+const SMOOTH_S = 0.15;   // time constant: smaller is snappier, larger is smoother but further behind
+const goalPos = new THREE.Vector3(), goalQuat = new THREE.Quaternion(), aim = new THREE.Object3D();
+
+// Third person: the camera sits behind and above the phone and turns with it.
+const CHASE_BACK = 2.5, CHASE_UP = 1.3, CHASE_AHEAD = 1.5, CHASE_TURN_S = 0.4;   // metres; turn easing is slower than SMOOTH_S so the view doesn't whip round
+const view = document.getElementById('view');
+let goalHeading = null, heading = 0;   // radians about +y; (sin, cos) is the horizontal facing direction
+view.onchange = () => {
+  controls.enabled = view.value !== 'chase';
+  if (view.value === 'chase') { if (goalHeading != null) heading = goalHeading; }
+  else controls.target.copy(phone.position);   // orbit around the phone again
+};
+// ?view=chase opens straight into a mode.
+const wanted = new URLSearchParams(location.search).get('view');
+if ([...view.options].some(o => o.value === wanted)) { view.value = wanted; view.onchange(); }
+let started = false;
+function apply(s) {
+  if (!s.cam) return;   // the app has not published a frame yet
+  const p = new THREE.Vector3(...s.cam);
+  aim.position.copy(p);
+  aim.lookAt(p.clone().add(new THREE.Vector3(...s.fwd)));
+  goalPos.copy(p);
+  goalQuat.copy(aim.quaternion);
+  // A phone pointing at the floor or ceiling has no heading; keep the last one.
+  if (Math.hypot(s.fwd[0], s.fwd[2]) > 0.3) goalHeading = Math.atan2(s.fwd[0], s.fwd[2]);
+  if (!started) {
+    started = true;
+    phone.position.copy(p);
+    phone.quaternion.copy(goalQuat);
+    const delta = p.clone().sub(controls.target);
+    camera.position.add(delta);
+    controls.target.add(delta);
+  }
+
+  if (s.floorY != null) grid.position.y = s.floorY;
+
+  const n = Math.min(s.points.length, MAX_POINTS * 3), pos = cloud.geometry.attributes.position;
+  for (let i = 0; i < n; i++) pos.array[i] = s.points[i] / 1000;
+  pos.needsUpdate = true;
+  cloud.geometry.setDrawRange(0, n / 3);
+
+  const seen = new Set();
+  for (const o of s.objects) {
+    seen.add(o.id);
+    let b = boxes.get(o.id);
+    if (!b) {
+      b = { box: new THREE.LineSegments(unitEdges, boxMaterial), tag: makeTag(name(o).toUpperCase()),
+            leader: new THREE.Line(leaderGeometry, boxMaterial), pos: new THREE.Vector3(), scale: new THREE.Vector3(), yaw: 0, fresh: true };
+      b.leader.scale.y = 0.25;
+      b.tag.visible = b.leader.visible = showLabels;
+      scene.add(b.box, b.tag, b.leader);
+      boxes.set(o.id, b);
+    }
+    const [lo, hi] = o.y;
+    b.pos.set(o.c[0], (lo + hi) / 2, o.c[1]);
+    b.scale.set(o.half[0] * 2, hi - lo, o.half[1] * 2);
+    b.yaw = o.yaw;
+  }
+  for (const [id, b] of boxes) {
+    if (seen.has(id)) continue;
+    scene.remove(b.box, b.tag, b.leader);
+    b.tag.material.map.dispose();
+    b.tag.material.dispose();
+    boxes.delete(id);
+  }
+
+  const count = s.objects.length;
+  status.textContent = `${count} object${count === 1 ? '' : 's'} // ${n / 3} points`;
+  const rows = s.objects.map(o => [name(o), Math.hypot(o.c[0] - p.x, o.c[1] - p.z)]).sort((a, b) => a[1] - b[1]);
+  list.replaceChildren(...rows.map(([label, d]) => {
+    const li = document.createElement('li'), a = document.createElement('span'), b = document.createElement('span');
+    a.textContent = label;
+    b.textContent = d.toFixed(1) + ' m';
+    li.append(a, b);
+    return li;
+  }));
+}
+
+const status = document.getElementById('status'), list = document.getElementById('list');
+async function poll() {
+  try {
+    apply(await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json());
+  } catch {
+    status.textContent = 'Signal lost. Keep SoundGuide open and on the same Wi-Fi.';
+  }
+  setTimeout(poll, POLL_MS);
+}
+document.fonts.load('34px Hacked').catch(() => {}).finally(poll);   // name plates are drawn to a canvas once, so wait for the font
+
+const clock = new THREE.Clock(), before = new THREE.Vector3();
+renderer.setAnimationLoop(() => {
+  // Frame-rate independent exponential easing; a background tab's long frame just snaps.
+  const dt = Math.min(clock.getDelta(), 1), k = 1 - Math.exp(-dt / SMOOTH_S);
+  if (started) {
+    before.copy(phone.position);
+    phone.position.lerp(goalPos, k);
+    phone.quaternion.slerp(goalQuat, k);
+    const p = phone.position;
+    if (view.value === 'follow') {
+      before.subVectors(p, before);
+      camera.position.add(before);
+      controls.target.add(before);
+    } else if (view.value === 'chase' && goalHeading != null) {
+      const kt = 1 - Math.exp(-dt / CHASE_TURN_S);
+      heading += Math.atan2(Math.sin(goalHeading - heading), Math.cos(goalHeading - heading)) * kt;
+      const dx = Math.sin(heading), dz = Math.cos(heading);
+      camera.position.set(p.x - dx * CHASE_BACK, p.y + CHASE_UP, p.z - dz * CHASE_BACK);
+      controls.target.set(p.x + dx * CHASE_AHEAD, p.y, p.z + dz * CHASE_AHEAD);   // controls.update() aims the camera here
+    }
+    if (p.distanceTo(lastTrail) > 0.05 && trailCount < MAX_TRAIL) {
+      trail.geometry.attributes.position.setXYZ(trailCount++, p.x, p.y, p.z);
+      trail.geometry.attributes.position.needsUpdate = true;
+      trail.geometry.setDrawRange(0, trailCount);
+      lastTrail.copy(p);
+    }
+  }
+  for (const b of boxes.values()) {
+    const kb = b.fresh ? 1 : k;   // a new box appears in place instead of flying in from the origin
+    b.fresh = false;
+    b.box.position.lerp(b.pos, kb);
+    b.box.scale.lerp(b.scale, kb);
+    // Shortest way round, so a yaw crossing ±π doesn't spin the box a full turn.
+    b.box.rotation.y += Math.atan2(Math.sin(b.yaw - b.box.rotation.y), Math.cos(b.yaw - b.box.rotation.y)) * kb;
+    const top = b.box.position.y + b.box.scale.y / 2;
+    b.leader.position.set(b.box.position.x, top, b.box.position.z);
+    b.tag.position.set(b.box.position.x, top + 0.25, b.box.position.z);
+  }
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

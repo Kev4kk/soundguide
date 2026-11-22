@@ -18,3 +18,6 @@ Automatic obstacles use ARKit planes and feature points plus on-device YOLO26n. 
 To validate range, use a sighted tester standing still and measure from the phone to an obstacle's front surface at 0.5, 1 and 1.5 m. Repeat with a textured box, a plain wall and a chair from different angles. Record displayed range, beep cadence, time to first warning, and missing or false warnings (including the empty corridor). Do not walk toward an obstacle to test it.
 
 This is a hackathon demo, not a mobility aid. Automatic detection can miss obstacles. Don't rely on it for navigation safety.
+
+## 3D web view
+While the app is open, it serves a live 3D view of what it has mapped. The status pills at the top of the screen show the address (for example `http://192.168.1.20:8080`); open it in a browser on a laptop on the same Wi-Fi and allow the local-network prompt on the phone. If the Wi-Fi blocks device-to-device traffic, as venue networks often do, connect both devices to Tailscale and use the `100.x` address shown instead. The page shows the phone's position and trail, ARKit feature points, and a labelled box for each tracked YOLO object. Objects only appear once a floor has been found, and people are never mapped. The page loads three.js from a CDN, so the laptop needs internet. There is no password: anyone on the same network can view it.

@@ -20,8 +20,14 @@
 	<string>1.0</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 	<key>NSCameraUsageDescription</key>
 	<string>The camera tracks where you are in the room so sounds come from the right place.</string>
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Lets a browser on the same Wi-Fi show a live 3D view of what the phone detects.</string>
 	<key>NSMicrophoneUsageDescription</key>
 	<string>Hold Ask and speak to ask about what's in front of the camera.</string>
 	<key>NSMotionUsageDescription</key>

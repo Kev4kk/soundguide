@@ -45,6 +45,7 @@ struct ContentView: View {
             if !ar.status.isEmpty { pill(ar.status, font: .subheadline) }
             if mode == .map { pill("Tap an obstacle to remove it", font: .caption) }
             headphoneStatus
+            ForEach(ar.webURLs, id: \.self) { pill("3D view: \($0)", font: .caption) }
         }
     }
 
