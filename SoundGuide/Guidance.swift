@@ -50,8 +50,26 @@ struct Tuning {
     var minObjectSize: Float = 0.2, maxObjectSize: Float = 2
     var maxObjectDisplayHeight: Float = 3  // cap estimates from clipped or noisy image boxes
     var objectMergeDistance: Float = 0.6   // a box this close to a known object is the same object
-    var minObjectSightings = 3
-    var objectForgetMisses = 8             // detector runs with its spot in view and nothing found there
+    var minObjectSightings = 3             // shown only once sightings span (n - 1) evidence intervals
+
+    // Existence score per object: sightings raise it, evidence of absence lowers it (misses at most once per
+    // objectEvidenceInterval). Forgotten at 0, so the cap is how much absence evidence an object can absorb.
+    var objectHit: Float = 1               // detected again
+    var objectUnseen: Float = 0.3          // spot clearly in view, nothing detected there
+    var objectSeenThrough: Float = 0.6     // feature points visible straight through its box
+    var objectConfirmScore: Float = 2.5
+    var objectMaxScore: Float = 5          // classes not listed below
+    // Furniture rarely moves, so it takes long to forget; things people carry or push go quickly.
+    var objectMaxScoreByLabel: [String: Float] = [
+        "couch": 8, "bed": 8, "dining table": 8, "refrigerator": 8, "oven": 8, "toilet": 8, "sink": 8, "bench": 8, "tv": 6,
+        "chair": 3.5, "backpack": 3, "handbag": 3, "suitcase": 3, "bottle": 3, "cup": 3, "umbrella": 3,
+        "laptop": 3, "sports ball": 3, "dog": 3, "cat": 3,
+    ]
+    var objectViewRange: Float = 3         // "should have been detected" only this close
+    // Same label and this much image overlap is the same object, even when its floor estimate is off by up to
+    // objectMatchMaxDistance. Merges duplicates like two boxes for one couch.
+    var objectMatchOverlap: Float = 0.4
+    var objectMatchMaxDistance: Float = 1.5
 }
 
 enum Haptic: Comparable {
