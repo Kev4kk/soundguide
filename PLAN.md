@@ -1,5 +1,7 @@
 # SoundGuide: spatial-audio room guide (plan)
 
+> **Update (Nov 2026):** waypoints, manual obstacles, route planning, beacon pings, spoken directions, hit counting and the setup/guide phases were removed. The app is now free walk on one screen: Camera | Map views, automatic obstacles, proximity beeps, the time-to-collision buzz and Hold to ask. See the README. The sections below that describe waypoints and routes are historical.
+
 ## Goal
 A sighted helper places objects in a room with an iPhone: **waypoints** to walk to, in order, and **obstacles** to keep away from. Then someone wearing headphones is guided through the room by 3D sound alone. The next waypoint calls to them from its real direction, and obstacles warn them when they get close.
 

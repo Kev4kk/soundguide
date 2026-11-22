@@ -1,15 +1,17 @@
 # SoundGuide
 
-An iPhone app that guides someone through a room with 3D sound. A sighted helper places waypoints and obstacles with ARKit. The walker then hears the next waypoint ping from its real direction, and obstacles buzz when they're close. It runs on any recent iPhone and doesn't need LiDAR. Wear headphones.
+An iPhone app that warns someone walking through a room, using 3D sound. The app maps obstacles automatically while you walk. Beeps get faster as the way ahead closes in, and an obstacle you're about to walk into buzzes from its real direction. On iOS 27 phones with Apple Intelligence, hold **Hold to ask** to ask about what the camera sees. It runs on any recent iPhone and doesn't need LiDAR. Wear headphones.
+
+There is one screen. **Camera | Map** at the top switches between the live camera, with detected hitboxes drawn on it, and a heading-up top-down map with 1 m and 2 m rings. On the map, the obstacle that's buzzing turns red and a red bar marks the beep distance. Tap an obstacle on the map to remove a false detection. **Cover screen** blanks the display for the walker and leaves one big Ask button.
 
 ## Run
 1. Open `SoundGuide.xcodeproj`, or regenerate it with `xcodegen generate` from `project.yml`.
 2. Set your signing team. Choose an iPhone as the target and press Run. ARKit doesn't run in the Simulator.
 3. Run the tests (guidance logic and Core ML/Vision integration) with `xcodebuild test -scheme SoundGuide -destination 'platform=iOS Simulator,name=iPhone 17 Pro'` (substitute an installed simulator if needed).
 
-All the guidance numbers, such as radii, ping speeds and the elevation cap, live in the `Tuning` struct in `SoundGuide/Guidance.swift`. The design is described in [PLAN.md](PLAN.md).
+All the tuning numbers, such as warning times, buzz speeds and the elevation cap, live in the `Tuning` struct in `SoundGuide/Guidance.swift`. The design is described in [PLAN.md](PLAN.md).
 
-With auto detection on, the app starts recognizing objects as soon as the camera and model are ready. Before guiding, the screen shows one prominent object and its direction relative to the phone (for example, “Person, left”). No floor scan or waypoint is needed for these cues. These label cues do not measure distance. A separate on-device proximity check runs at up to 10 Hz when AR tracking is normal. It checks an 80 cm wide corridor up to 2 m forward from the phone for observed vertical planes and groups of repeatable feature points. It displays approximate forward clearance; beeps and haptic pulses repeat faster as clearance shrinks. Detection does not narrate objects or distances. Spoken route instructions remain available while guiding. No waypoint, YOLO label or floor scan is required. Before a classified floor exists, point-based warnings only cover a band near phone height. Hold the phone facing your direction of travel. The measurement is from the phone, not your feet; it is not a prediction of impact. Silence does not mean a clear path.
+With auto detection on, the app starts recognizing objects as soon as the camera and model are ready. The camera view shows one prominent object and its direction relative to the phone (for example, “Person, left”). No floor scan is needed for these cues. These label cues do not measure distance. A separate on-device proximity check runs at up to 10 Hz when AR tracking is normal. It checks an 80 cm wide corridor up to 2 m forward from the phone for observed vertical planes and groups of repeatable feature points. It displays approximate forward clearance; beeps and haptic pulses repeat faster as clearance shrinks. Detection does not narrate objects or distances. No YOLO label or floor scan is required. Before a classified floor exists, point-based warnings only cover a band near phone height. Hold the phone facing your direction of travel. The measurement is from the phone, not your feet; it is not a prediction of impact. Silence does not mean a clear path.
 
 Automatic obstacles use ARKit planes and feature points plus on-device YOLO26n. See the [model license and export notes](LICENSES/YOLO26n.md).
 
