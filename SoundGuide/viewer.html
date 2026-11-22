@@ -31,6 +31,11 @@
   #status { color: #5fd4ff; }
   #list { min-width: 200px; min-height: 0; overflow-y: auto; margin: 0; list-style: none; color: #9a9a9a; scrollbar-width: thin; scrollbar-color: #9a9a9a transparent; }
   #list:empty { display: none; }
+  #ask { max-width: min(420px, 80vw); text-transform: none; letter-spacing: 0; font: 14px/1.45 ui-monospace, Menlo, monospace; }
+  #ask[hidden] { display: none; }
+  #ask b { display: block; color: #5fd4ff; font: 13px Hacked, ui-monospace, monospace; letter-spacing: .1em; text-transform: uppercase; }
+  #ask p { margin: 6px 0 0; color: #fff; }
+  #ask p + p { color: #cfcfcf; }
   #list li { display: flex; justify-content: space-between; gap: 24px; line-height: 1.7; }
   #list li span:first-child { color: #fff; }
   @keyframes blink { 50% { opacity: 0; } }
@@ -50,6 +55,7 @@
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
 </select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
+<div id="ask" class="panel" aria-live="polite" hidden><b id="ask-state"></b><p id="ask-q"></p><p id="ask-a"></p></div>
 <ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
@@ -152,10 +158,12 @@ beepsButton.onclick = () => {
   lastBeep = -Infinity;   // each AudioContext's clock starts at 0
   if (audio) {
     audio.resume();
+    speechSynthesis.speak(new SpeechSynthesisUtterance(''));   // Safari only lets speech start from a click
     beep(audio.currentTime + 0.05);   // confirms sound works; the phone may well be silent right now
   }
   beepsButton.setAttribute('aria-pressed', !!audio);
   beepsButton.textContent = `Sound: ${audio ? 'on' : 'off'}`;
+  if (!audio) speechSynthesis.cancel();
 };
 function beep(t) {
   const o = audio.createOscillator(), g = audio.createGain();
@@ -262,6 +270,23 @@ function apply(s) {
 }
 
 const status = document.getElementById('status'), list = document.getElementById('list');
+
+// Hold to ask, mirrored: the question as heard, the answer as it streams, and (with Sound on) the same lines
+// spoken in the browser's own voice as the phone says them.
+const askPanel = document.getElementById('ask'), askState = document.getElementById('ask-state');
+const askQ = document.getElementById('ask-q'), askA = document.getElementById('ask-a');
+const ASK_LABELS = { listening: 'Listening', transcribing: 'Listening', thinking: 'Thinking', ready: 'Answer' };
+let spokenCount = null;   // null until the first snapshot: lines from before the page opened are not replayed
+function showAsk(ask) {
+  askPanel.hidden = !ask || (!ask.q && !ask.a && !['listening', 'transcribing'].includes(ask.state));
+  if (!ask) return;
+  askState.textContent = `Ask // ${ASK_LABELS[ask.state] ?? ask.state}`;
+  askQ.textContent = ask.q ? `“${ask.q}”` : (ask.state === 'listening' ? 'Listening…' : '');
+  askA.textContent = ask.a;
+  const fresh = spokenCount == null ? 0 : Math.min(ask.saidCount - spokenCount, ask.said.length);
+  spokenCount = ask.saidCount;
+  if (audio && fresh > 0) for (const line of ask.said.slice(-fresh)) speechSynthesis.speak(new SpeechSynthesisUtterance(line));
+}
 async function poll() {
   const started = performance.now();
   try {
@@ -269,6 +294,7 @@ async function poll() {
     // AirPods steering: view and sound follow the head (no position of its own: ears above the phone).
     if (s.head) { s.cam = s.head.slice(0, 3); s.fwd = s.head.slice(3); }
     range = s.range ?? null;
+    showAsk(s.ask);
     apply(s);
   } catch {
     range = null;   // never beep from a stale reading

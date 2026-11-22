@@ -9,6 +9,10 @@ final class Asker: ObservableObject {
     enum State: Equatable { case unsupported, unavailable(String), ready, listening, transcribing, thinking }
     @Published private(set) var state: State = .unsupported
     @Published private(set) var heard = ""
+    @Published private(set) var answer = ""   // the model's answer so far, streamed
+    /// The last lines Asker spoke and how many it has spoken in all, so the web viewer can replay only new ones.
+    private(set) var spoken: [String] = []
+    private(set) var spokenCount = 0
     var busy: Bool { state == .listening || state == .transcribing || state == .thinking }
 
     static let basePrompt = """
@@ -85,11 +89,12 @@ final class Asker: ObservableObject {
         answering?.cancel()
         image = snapshot(camera)
         heard = ""
+        answer = ""
         do {
             try startListening()
             state = .listening
         } catch {
-            say("The microphone isn't available.")
+            speak("The microphone isn't available.")
             state = .ready
         }
     }
@@ -103,7 +108,7 @@ final class Asker: ObservableObject {
             let question = await self.stopListening()
             guard !Task.isCancelled else { return }
             if question.isEmpty || self.image == nil {
-                self.say(question.isEmpty ? "I didn't catch that. Hold the button while you speak." : "The camera isn't ready.")
+                self.speak(question.isEmpty ? "I didn't catch that. Hold the button while you speak." : "The camera isn't ready.")
             } else if #available(iOS 27, *) {
                 self.state = .thinking
                 await self.answer(question)
@@ -151,16 +156,35 @@ final class Asker: ObservableObject {
             for try await part in stream {
                 guard !Task.isCancelled else { return }
                 said = part.content
+                answer = part.content
                 pending += part.content.dropFirst(seen)
                 seen = part.content.count
                 let (done, rest) = Sentences.split(pending)
                 pending = rest
-                done.forEach(say)
+                done.forEach(speak)
             }
             let tail = pending.trimmingCharacters(in: .whitespacesAndNewlines)
-            if !tail.isEmpty && !Task.isCancelled { say(tail) }
+            if !tail.isEmpty && !Task.isCancelled { speak(tail) }
         } catch {
-            if !Task.isCancelled { say("Sorry, I couldn't answer that.") }
+            if !Task.isCancelled { speak("Sorry, I couldn't answer that.") }
+        }
+    }
+
+    private func speak(_ line: String) {
+        spoken.append(line)
+        if spoken.count > 10 { spoken.removeFirst(spoken.count - 10) }
+        spokenCount += 1
+        say(line)
+    }
+
+    var stateName: String {
+        switch state {
+        case .unsupported: "unsupported"
+        case .unavailable: "unavailable"
+        case .ready: "ready"
+        case .listening: "listening"
+        case .transcribing: "transcribing"
+        case .thinking: "thinking"
         }
     }
 

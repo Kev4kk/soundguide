@@ -13,6 +13,15 @@ final class WebViewerTests: XCTestCase {
         let beepJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(beeping)) as? [String: Any])
         XCTAssertEqual(beepJSON["range"] as? Double, 0.5)
         XCTAssertNil(json["head"])
+        XCTAssertNil(json["ask"])   // a phone that can't ask sends nothing
+        let asked = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [],
+                                  ask: .init(state: "thinking", q: "What's ahead?", a: "A chair, about", said: ["Hi."], saidCount: 4))
+        let askJSON = try XCTUnwrap((JSONSerialization.jsonObject(with: JSONEncoder().encode(asked)) as? [String: Any])?["ask"] as? [String: Any])
+        XCTAssertEqual(askJSON["state"] as? String, "thinking")
+        XCTAssertEqual(askJSON["q"] as? String, "What's ahead?")
+        XCTAssertEqual(askJSON["a"] as? String, "A chair, about")
+        XCTAssertEqual(askJSON["said"] as? [String], ["Hi."])
+        XCTAssertEqual(askJSON["saidCount"] as? Int, 4)
         let steered = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [],
                                     head: (ear: [0, 0.3, 0], forward: [1, 0, 0]))
         let headJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(steered)) as? [String: Any])
