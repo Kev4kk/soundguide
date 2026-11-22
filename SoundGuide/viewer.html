@@ -17,7 +17,8 @@
   #hud b { display: block; font-size: 14px; letter-spacing: .2em; }
   #hud b::after { content: "_"; animation: blink 1s steps(1) infinite; }
   #hud label { display: block; margin-top: 6px; color: #9a9a9a; cursor: pointer; }
-  #hud input { accent-color: #fff; vertical-align: -2px; }
+  #hud select { background: #000; color: #fff; border: 1px solid #9a9a9a; padding: 2px 4px;
+                font: inherit; text-transform: inherit; letter-spacing: inherit; }
   #hud button { display: block; margin-top: 8px; padding: 4px 10px; background: none; color: #fff; border: 1px solid #fff;
                 font: inherit; text-transform: inherit; letter-spacing: inherit; cursor: pointer; }
   #hud button:hover, #hud button:focus-visible { background: #fff; color: #000; }
@@ -38,7 +39,11 @@
 </script>
 </head>
 <body>
-<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label><input type="checkbox" id="follow" checked> Follow phone</label><button id="labels" aria-pressed="true">Labels: on</button></div>
+<div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label>Camera <select id="view">
+  <option value="free">Free</option>
+  <option value="follow" selected>Follow</option>
+  <option value="chase">Third person</option>
+</select></label><button id="labels" aria-pressed="true">Labels: on</button></div>
 <ul id="list" class="panel" aria-label="Detected objects"></ul>
 <script type="module">
 import * as THREE from 'three';
@@ -122,6 +127,19 @@ labelsButton.onclick = () => {
 // Snapshots arrive at 5 Hz. They only set goals; every rendered frame eases towards them.
 const SMOOTH_S = 0.15;   // time constant: smaller is snappier, larger is smoother but further behind
 const goalPos = new THREE.Vector3(), goalQuat = new THREE.Quaternion(), aim = new THREE.Object3D();
+
+// Third person: the camera sits behind and above the phone and turns with it.
+const CHASE_BACK = 2.5, CHASE_UP = 1.3, CHASE_AHEAD = 1.5, CHASE_TURN_S = 0.4;   // metres; turn easing is slower than SMOOTH_S so the view doesn't whip round
+const view = document.getElementById('view');
+let goalHeading = null, heading = 0;   // radians about +y; (sin, cos) is the horizontal facing direction
+view.onchange = () => {
+  controls.enabled = view.value !== 'chase';
+  if (view.value === 'chase') { if (goalHeading != null) heading = goalHeading; }
+  else controls.target.copy(phone.position);   // orbit around the phone again
+};
+// ?view=chase opens straight into a mode.
+const wanted = new URLSearchParams(location.search).get('view');
+if ([...view.options].some(o => o.value === wanted)) { view.value = wanted; view.onchange(); }
 let started = false;
 function apply(s) {
   if (!s.cam) return;   // the app has not published a frame yet
@@ -130,6 +148,8 @@ function apply(s) {
   aim.lookAt(p.clone().add(new THREE.Vector3(...s.fwd)));
   goalPos.copy(p);
   goalQuat.copy(aim.quaternion);
+  // A phone pointing at the floor or ceiling has no heading; keep the last one.
+  if (Math.hypot(s.fwd[0], s.fwd[2]) > 0.3) goalHeading = Math.atan2(s.fwd[0], s.fwd[2]);
   if (!started) {
     started = true;
     phone.position.copy(p);
@@ -197,17 +217,23 @@ poll();
 const clock = new THREE.Clock(), before = new THREE.Vector3();
 renderer.setAnimationLoop(() => {
   // Frame-rate independent exponential easing; a background tab's long frame just snaps.
-  const k = 1 - Math.exp(-Math.min(clock.getDelta(), 1) / SMOOTH_S);
+  const dt = Math.min(clock.getDelta(), 1), k = 1 - Math.exp(-dt / SMOOTH_S);
   if (started) {
     before.copy(phone.position);
     phone.position.lerp(goalPos, k);
     phone.quaternion.slerp(goalQuat, k);
-    if (document.getElementById('follow').checked) {
-      before.subVectors(phone.position, before);
+    const p = phone.position;
+    if (view.value === 'follow') {
+      before.subVectors(p, before);
       camera.position.add(before);
       controls.target.add(before);
+    } else if (view.value === 'chase' && goalHeading != null) {
+      const kt = 1 - Math.exp(-dt / CHASE_TURN_S);
+      heading += Math.atan2(Math.sin(goalHeading - heading), Math.cos(goalHeading - heading)) * kt;
+      const dx = Math.sin(heading), dz = Math.cos(heading);
+      camera.position.set(p.x - dx * CHASE_BACK, p.y + CHASE_UP, p.z - dz * CHASE_BACK);
+      controls.target.set(p.x + dx * CHASE_AHEAD, p.y, p.z + dz * CHASE_AHEAD);   // controls.update() aims the camera here
     }
-    const p = phone.position;
     if (p.distanceTo(lastTrail) > 0.05 && trailCount < MAX_TRAIL) {
       trail.geometry.attributes.position.setXYZ(trailCount++, p.x, p.y, p.z);
       trail.geometry.attributes.position.needsUpdate = true;
