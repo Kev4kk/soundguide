@@ -47,8 +47,8 @@
 <div id="side">
 <div id="hud" class="panel"><b>SoundGuide // live feed</b><span id="status" role="status">Connecting…</span><label>Camera <select id="view">
   <option value="free">Free</option>
-  <option value="follow" selected>Follow</option>
-  <option value="chase">Third person</option>
+  <option value="follow">Follow</option>
+  <option value="chase" selected>Third person</option>
 </select></label><button id="labels" aria-pressed="true">Labels: on</button></div>
 <ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
@@ -148,7 +148,8 @@ view.onchange = () => {
 };
 // ?view=chase opens straight into a mode.
 const wanted = new URLSearchParams(location.search).get('view');
-if ([...view.options].some(o => o.value === wanted)) { view.value = wanted; view.onchange(); }
+if ([...view.options].some(o => o.value === wanted)) view.value = wanted;
+view.onchange();   // the default (third person) also needs orbit controls off
 let started = false;
 function apply(s) {
   if (!s.cam) return;   // the app has not published a frame yet
