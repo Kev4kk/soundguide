@@ -49,7 +49,7 @@
   <option value="free">Free</option>
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
-</select></label><button id="labels" aria-pressed="true">Labels: on</button></div>
+</select></label><button id="labels" aria-pressed="false">Labels: off</button></div>
 <ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
@@ -122,7 +122,7 @@ function makeTag(text) {
   return tag;
 }
 
-let showLabels = true;
+let showLabels = false;
 const labelsButton = document.getElementById('labels');
 labelsButton.onclick = () => {
   showLabels = !showLabels;
