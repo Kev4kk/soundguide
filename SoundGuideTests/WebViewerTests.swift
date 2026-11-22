@@ -12,7 +12,6 @@ final class WebViewerTests: XCTestCase {
         let beeping = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [], range: 0.5)
         let beepJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(beeping)) as? [String: Any])
         XCTAssertEqual(beepJSON["range"] as? Double, 0.5)
-        XCTAssertNil(json["buzz"])
         XCTAssertNil(json["head"])
         let steered = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [],
                                     head: (ear: [0, 0.3, 0], forward: [1, 0, 0]))
@@ -21,12 +20,6 @@ final class WebViewerTests: XCTestCase {
         XCTAssertEqual(head.count, 6)
         XCTAssertEqual(head[1], 0.3, accuracy: 1e-6)
         XCTAssertEqual(Array(head[3...]), [1, 0, 0])
-        let warned = Warning(position: [1, 0, -2], volume: 0.5, buzzInterval: 0.25)
-        let buzzing = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [], buzz: warned)
-        let buzzJSON = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(buzzing)) as? [String: Any])
-        XCTAssertEqual(buzzJSON["buzz"] as? [Double], [1, 0, -2, 0.5, 0.25])
-        let silent = WorldSnapshot(camera: [0, 0, 0], forward: [0, 0, -1], floorY: nil, objects: [], buzz: Warning())
-        XCTAssertNil(try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(silent)) as? [String: Any])["buzz"])
         XCTAssertNil(json["points"])   // the viewer draws a tiled floor, not the feature points
         let o = try XCTUnwrap((json["objects"] as? [[String: Any]])?.first)
         XCTAssertEqual(o["id"] as? Int, 7)

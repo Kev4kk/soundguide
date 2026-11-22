@@ -17,15 +17,13 @@ struct WorldSnapshot: Encodable, Equatable {
     let floorY: Float?
     let objects: [Object]
     let range: Float?       // forward clearance the phone is beeping for, nil when it is silent
-    let buzz: [Float]?      // x, y, z, volume, interval (s) of the directional buzz, nil when silent
     let head: [Float]?      // ear x, y, z + AirPods forward x, y, z; nil when the phone's pose is the listener
 
     init(camera: SIMD3<Float>, forward: SIMD3<Float>, floorY: Float?,
-         objects: [(id: Int, label: String, obstacle: Obstacle)], range: Float? = nil, buzz: Warning? = nil,
+         objects: [(id: Int, label: String, obstacle: Obstacle)], range: Float? = nil,
          head: (ear: SIMD3<Float>, forward: SIMD3<Float>)? = nil) {
         self.head = head.map { [$0.ear.x, $0.ear.y, $0.ear.z, $0.forward.x, $0.forward.y, $0.forward.z] }
         self.range = range
-        self.buzz = buzz.flatMap { w in w.position.map { [$0.x, $0.y, $0.z, w.volume, Float(w.buzzInterval)] } }
         cam = [camera.x, camera.y, camera.z]
         fwd = [forward.x, forward.y, forward.z]
         self.floorY = floorY
