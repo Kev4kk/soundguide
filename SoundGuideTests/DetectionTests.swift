@@ -191,22 +191,6 @@ final class DetectionTests: XCTestCase {
         XCTAssertTrue(below.build(floorY: 0, now: 0.5, tuning: t).contains { $0.distance(to: [0, -1.5]) < 0.01 })
     }
 
-    // MARK: Navigator
-
-    func testNavigatorReplansWhenObstaclesChange() {
-        var nav = Navigator()
-        let wps: [SIMD3<Float>] = [[0, 0, -4]], l = SIMD3<Float>(0, 1.5, 0)
-        _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0, waypoints: wps, obstacles: [], tuning: t)
-        _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0.1, waypoints: wps, obstacles: [], tuning: t)
-        XCTAssertEqual(nav.replans, 1)
-        let box = Obstacle(center: [0, 0, -2], halfSize: [0.2, 0.2])
-        _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0.2, waypoints: wps, obstacles: [box], tuning: t)
-        XCTAssertEqual(nav.replans, 2)
-        XCTAssertTrue(nav.path!.allSatisfy { box.distance(to: $0) > 0.2 })
-        _ = nav.tick(listener: l, forward: [0, 0, -1], now: 0.3, waypoints: wps, obstacles: [box], tuning: t)
-        XCTAssertEqual(nav.replans, 2)
-    }
-
     // MARK: Model integration
 
     func testYOLO26SupportsEmptyVisionResults() throws {

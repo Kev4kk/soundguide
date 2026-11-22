@@ -24,7 +24,6 @@
 		BF19E1CD1726ABC37C14AA46 /* Detection.swift in Sources */ = {isa = PBXBuildFile; fileRef = CFBC35F3C3681C8F3DDF684A /* Detection.swift */; };
 		D226B4EE7F79E276175B73AD /* ContentView.swift in Sources */ = {isa = PBXBuildFile; fileRef = FD520BDF7885AD59B8F6B636 /* ContentView.swift */; };
 		D717EF3FF449266193D432A4 /* SentencesTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = B6FF426373D561CD3FF951AE /* SentencesTests.swift */; };
-		FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */ = {isa = PBXBuildFile; fileRef = A69F4C99C93D21040FD12441 /* PathPlanner.swift */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
@@ -51,7 +50,6 @@
 		7BCD744D20692AD22047621F /* WebViewer.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WebViewer.swift; sourceTree = "<group>"; };
 		8C6B9AC20D46DEF1E3A01F6D /* SoundGuideTests.xctest */ = {isa = PBXFileReference; includeInIndex = 0; lastKnownFileType = wrapper.cfbundle; path = SoundGuideTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		9DCF756858D75E950D24A515 /* HeadTracker.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HeadTracker.swift; sourceTree = "<group>"; };
-		A69F4C99C93D21040FD12441 /* PathPlanner.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PathPlanner.swift; sourceTree = "<group>"; };
 		AC8B2B384F858CFE225AED37 /* GuidanceTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = GuidanceTests.swift; sourceTree = "<group>"; };
 		AF8BFF828D420D587D862BF4 /* YOLO26n.mlpackage */ = {isa = PBXFileReference; path = YOLO26n.mlpackage; sourceTree = "<group>"; };
 		B6FF426373D561CD3FF951AE /* SentencesTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SentencesTests.swift; sourceTree = "<group>"; };
@@ -103,7 +101,6 @@
 				6E6BBFB9BEFB604BC7966CE0 /* hacked.ttf */,
 				9DCF756858D75E950D24A515 /* HeadTracker.swift */,
 				05FC900B1A040F27B9D5DFFE /* Info.plist */,
-				A69F4C99C93D21040FD12441 /* PathPlanner.swift */,
 				418FA0E1AAA825730B274295 /* SoundGuideApp.swift */,
 				14FE66F34220C405C1ADDEB8 /* SpatialAudio.swift */,
 				09415357BB82E6BB704E38E2 /* viewer.html */,
@@ -226,7 +223,6 @@
 				78DEDD00CAAECEC4761D789A /* Guidance.swift in Sources */,
 				81A4A4CB43B2C008EFCBE772 /* GuideMapView.swift in Sources */,
 				98DE39A68E3B116F8B90ABAE /* HeadTracker.swift in Sources */,
-				FE81F259775CDAA14300E3FF /* PathPlanner.swift in Sources */,
 				83D44F707A7A5563541463E4 /* SoundGuideApp.swift in Sources */,
 				45B7B72122EAE8A61C74C6FB /* SpatialAudio.swift in Sources */,
 				6544DC526ABDF90316FC9326 /* WebViewer.swift in Sources */,

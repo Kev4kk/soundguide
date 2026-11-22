@@ -29,15 +29,6 @@ final class YOLO26Detector {
     }
 }
 
-enum ObjectKind { case waypoint, obstacle }
-
-struct Placed {
-    let kind: ObjectKind
-    let position: SIMD3<Float>
-    var obstacle: Obstacle?
-    let entities: [AnchorEntity]   // marker, plus the route line for waypoints
-}
-
 struct Detected: Equatable {
     enum Source: Equatable { case plane(UUID), points, object }
     let obstacle: Obstacle
@@ -49,8 +40,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     let arView = ARView(frame: .zero)
     var tuning = Tuning()
 
-    @Published private(set) var placed: [Placed] = []
-    @Published private(set) var guiding = false
     @Published private(set) var status = ""
     @Published private(set) var trackingNormal = false
     @Published private(set) var cameraStatus = "Starting object detection…"
@@ -59,13 +48,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var liveRange = LiveRange()
     private var lastRangeSample = -Double.infinity
     private var lastRangeHit = -Double.infinity
+    private var rangeDistance: Float = 0
     private var classifiedFloor: Float?
     @Published private(set) var usingHeadTracking = false
-    @Published private(set) var headphonesReady = false
     @Published private(set) var motionAccessDenied = false
     @Published private(set) var map: GuideMap?
-    // Beacon pings and spoken directions only play while this is on. Safety sounds always play.
-    @Published private(set) var guideAudioOn = false
     private var lastMapUpdate: TimeInterval = 0
     @Published var autoDetect = true {
         didSet {
@@ -90,15 +77,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private let head = HeadTracker()
     // Phone heading and AirPods yaw captured together; assumes you face along the phone at that moment.
     private var headRef: (phoneYaw: Float, headYaw: Double)?
-    private var nav = Navigator()
-    private var trackingLost = false
+    private var motion = VelocityTracker()
     private var lastHaptic: TimeInterval = 0
     private let tap = UIImpactFeedbackGenerator(style: .medium)
     private let light = UIImpactFeedbackGenerator(style: .light)
     private let warn = UIImpactFeedbackGenerator(style: .heavy)
-    private let success = UINotificationFeedbackGenerator()
-    // Obstacle being dragged out: first corner, phone heading at press, live preview.
-    private var drag: (corner: SIMD3<Float>, yaw: Float, last: SIMD3<Float>, preview: AnchorEntity)?
     private var pointMap = PointMap()
     private var ignoredPlanes = Set<UUID>()
     private var lastBuild: TimeInterval = 0
@@ -116,8 +99,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var modelHitboxes: [Hitbox] = []
     private lazy var hitboxMesh = MeshResource.generateBox(size: 1)
 
-    var waypoints: [SIMD3<Float>] { placed.filter { $0.kind == .waypoint }.map(\.position) }
-    var obstacles: [Obstacle] { placed.compactMap(\.obstacle) + navigationObstacles }
 
     override init() {
         super.init()
@@ -127,9 +108,11 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         config.planeDetection = [.horizontal, .vertical]
         arView.session.run(config)
 
-        // Show the live camera and setup UI while world tracking initializes.
         if tuning.useHeadTracking { head.start() }
         web.start()
+        UIApplication.shared.isIdleTimerDisabled = true   // the walker never touches the screen to keep it awake
+        audio.start()
+        asker.prepare()
         visionQueue.async { [weak self] in
             do {
                 let detector = try YOLO26Detector()
@@ -141,107 +124,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                 }
             }
         }
-    }
-
-    // MARK: Setup
-
-    private func crosshairHit() -> SIMD3<Float>? {
-        let center = CGPoint(x: arView.bounds.midX, y: arView.bounds.midY)
-        guard let c = arView.raycast(from: center, allowing: .estimatedPlane, alignment: .any).first?.worldTransform.columns.3
-        else { return nil }
-        return SIMD3(c.x, c.y, c.z)
-    }
-
-    private func noSurface() { status = "No surface under the crosshair. Move the phone slowly." }
-
-    func placeWaypoint() {
-        guard let pos = crosshairHit() else { return noSurface() }
-        let marker = AnchorEntity(world: pos)
-        marker.addChild(ModelEntity(mesh: .generateSphere(radius: 0.06),
-                                    materials: [SimpleMaterial(color: .systemGreen, isMetallic: false)]))
-        arView.scene.addAnchor(marker)
-        var entities = [marker]
-        if let prev = waypoints.last {
-            let line = Self.line(from: prev, to: pos)
-            arView.scene.addAnchor(line)
-            entities.append(line)
-        }
-        placed.append(Placed(kind: .waypoint, position: pos, entities: entities))
-        status = "Waypoint \(waypoints.count)"
-        tap.impactOccurred()
-    }
-
-    /// Press on the Obstacle button: this corner. Release: the opposite corner. A quick tap gives a small box.
-    func beginObstacle() {
-        guard drag == nil else { return }
-        guard let a = crosshairHit() else { return noSurface() }
-        var yaw: Float = 0   // ponytail: phone pointing straight down has no heading; falls back to world axes
-        if let m = arView.session.currentFrame?.camera.transform {
-            let f = -SIMD3(m.columns.2.x, 0, m.columns.2.z)
-            if simd_length(f) > 0.3 { yaw = Guidance.yaw(of: f) }
-        }
-        let preview = Self.box(Obstacle.fromCorners(a, a, yaw: yaw, tuning: tuning), color: .systemRed.withAlphaComponent(0.4))
-        arView.scene.addAnchor(preview)
-        drag = (a, yaw, a, preview)
-        status = "Move to the opposite corner, then let go"
-        tap.impactOccurred()
-    }
-
-    func endObstacle() {
-        guard let d = drag else { return }
-        drag = nil
-        arView.scene.removeAnchor(d.preview)
-        let b = crosshairHit() ?? d.last
-        let o = Obstacle.fromCorners(d.corner, b, yaw: d.yaw, tuning: tuning)
-        let marker = Self.box(o, color: .systemRed.withAlphaComponent(0.8))
-        arView.scene.addAnchor(marker)
-        placed.append(Placed(kind: .obstacle, position: o.center, obstacle: o, entities: [marker]))
-        status = String(format: "Obstacle %d: %.1f × %.1f m", placed.compactMap(\.obstacle).count, o.halfSize.x * 2, o.halfSize.y * 2)
-        tap.impactOccurred()
-    }
-
-    private func updateDragPreview() {
-        guard let d = drag, let b = crosshairHit() else { return }
-        drag?.last = b
-        let o = Obstacle.fromCorners(d.corner, b, yaw: d.yaw, tuning: tuning)
-        d.preview.transform = Self.boxTransform(o)
-    }
-
-    /// Unit cube scaled to the obstacle: a 10 cm tall slab so it doesn't hide what's behind it.
-    private static func box(_ o: Obstacle, color: UIColor) -> AnchorEntity {
-        let anchor = AnchorEntity(world: .zero)
-        let cube = ModelEntity(mesh: .generateBox(size: 1), materials: [SimpleMaterial(color: color, isMetallic: false)])
-        anchor.addChild(cube)
-        anchor.transform = boxTransform(o)
-        return anchor
-    }
-
-    private static func boxTransform(_ o: Obstacle) -> Transform {
-        // Rotating about +y by yaw turns -z into Guidance.forward(yaw), so the box lines up with the obstacle's axes.
-        Transform(scale: SIMD3(o.halfSize.x * 2, 0.1, o.halfSize.y * 2),
-                  rotation: simd_quatf(angle: o.yaw, axis: [0, 1, 0]),
-                  translation: o.center + [0, 0.05, 0])
-    }
-
-    func undo() {
-        guard let last = placed.popLast() else { return }
-        last.entities.forEach { arView.scene.removeAnchor($0) }
-        status = ""
-    }
-
-    func clear() {
-        placed.flatMap(\.entities).forEach { arView.scene.removeAnchor($0) }
-        placed = []
-        status = ""
-    }
-
-    private static func line(from a: SIMD3<Float>, to b: SIMD3<Float>) -> AnchorEntity {
-        let anchor = AnchorEntity(world: .zero)
-        let bar = ModelEntity(mesh: .generateBox(size: [0.01, 0.01, simd_distance(a, b)]),
-                              materials: [SimpleMaterial(color: .systemGreen.withAlphaComponent(0.6), isMetallic: false)])
-        bar.look(at: b, from: (a + b) / 2, relativeTo: nil)
-        anchor.addChild(bar)
-        return anchor
     }
 
     // MARK: Automatic obstacles
@@ -414,14 +296,16 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
                             mesh: mesh, color: .systemYellow, scene: scene)
     }
 
-    /// Deletes the detected obstacle under the crosshair, and keeps it from coming back.
-    /// ponytail: a removed plane is ignored by anchor ID; if ARKit later merges it into another plane, Remove again.
-    func removeDetected() {
-        guard let hit = crosshairHit() else { return noSurface() }
-        let p = xz(hit)
-        guard let d = detected.min(by: { $0.obstacle.distance(to: p) < $1.obstacle.distance(to: p) }),
-              d.obstacle.distance(to: p) < tuning.removeRadius
-        else { status = "No detected obstacle under the crosshair"; return }
+    /// The detected obstacle a map tap at `p` points at, if any.
+    func detected(near p: SIMD2<Float>) -> Detected? {
+        detected.filter { $0.obstacle.distance(to: p) < tuning.removeRadius }
+            .min { $0.obstacle.distance(to: p) < $1.obstacle.distance(to: p) }
+    }
+
+    /// Deletes the detected obstacle nearest `p`, and keeps it from coming back.
+    /// ponytail: a removed plane is ignored by anchor ID; if ARKit later merges it into another plane, remove it again.
+    func removeDetected(near p: SIMD2<Float>) {
+        guard let d = detected(near: p) else { status = "That obstacle is gone already"; return }
         let r = d.obstacle.boundingRadius + tuning.detectCell
         switch d.source {
         case .plane(let id): ignoredPlanes.insert(id)
@@ -433,7 +317,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         let remaining = detected.filter { $0 != d }
         navigationObstacles = remaining.map { $0.obstacle.navigationFootprint }
         setDetected(remaining)
-        status = "Removed detected obstacle"
+        status = "Removed obstacle"
         tap.impactOccurred()
     }
 
@@ -447,29 +331,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         }
     }
 
-    // MARK: Guide
-
-    func startGuiding() {
-        guard !waypoints.isEmpty else { status = "Place a waypoint first."; return }
-        nav = Navigator()
-        map = nil
-        guideAudioOn = false
-        trackingLost = false
-        lastHaptic = 0
-        guiding = true
-        headRef = nil
-        UIApplication.shared.isIdleTimerDisabled = true
-        audio.start()
-        asker.prepare()
-        audio.say("Guiding to waypoint 1 of \(waypoints.count). Press Play to hear the guide.")
-        status = "Guiding to 1 of \(waypoints.count). Guide paused"
-    }
-
-    func toggleGuideAudio() {
-        guideAudioOn.toggle()
-        if guideAudioOn { nav.requestCallout() } else { audio.say("Guide paused") }
-        tap.impactOccurred()
-    }
+    // MARK: Walk
 
     func beginAsk() {
         audio.stopSpeaking()
@@ -479,15 +341,6 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     func endAsk() { asker.end() }
 
-    func stopGuiding(announce: String? = nil) {
-        asker.cancel()
-        guiding = false
-        usingHeadTracking = false
-        UIApplication.shared.isIdleTimerDisabled = false
-        if let announce { audio.say(announce) } else { audio.stop() }
-        status = announce ?? "Stopped"
-    }
-
     private func resetRange() {
         liveRange = LiveRange()
         beepTiming = ProximityBeepTiming()
@@ -495,7 +348,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         proximityStatus = "Distance not established"
     }
 
-    /// Independent of model inference, mapped hitboxes, waypoints and the Play button.
+    /// Independent of model inference and mapped hitboxes.
     private func checkClearance(_ frame: ARFrame) {
         let now = frame.timestamp
         guard now - lastRangeSample >= 0.1 else { return }
@@ -527,6 +380,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             return
         }
         lastRangeHit = now
+        rangeDistance = d
         let band = d <= 0.65 ? 0 : d <= 1.2 ? 1 : 2
         let distance = max(0.25, (d * 4).rounded() / 4)
         let message = String(format: "Obstacle ahead, about %g %@", Double(distance), distance == 1 ? "meter" : "meters")
@@ -542,71 +396,35 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
             if !normal {
                 detectorGeneration &+= 1
                 resetRange()
+                audio.say("Hold still")   // obstacle warnings are off until tracking comes back
             }
+            status = normal ? "" : "Tracking lost"
             trackingNormal = normal
         }
-        let ready = head.isLive, denied = head.accessDenied
-        if ready != headphonesReady { headphonesReady = ready }
+        let denied = head.accessDenied
         if denied != motionAccessDenied { motionAccessDenied = denied }
-        if drag != nil { updateDragPreview() }
         if autoDetect {
             if normal { checkClearance(frame); detect(frame) } // Metric mapping still requires a trustworthy pose.
             runDetector(frame)         // Camera recognition needs neither a floor nor world tracking.
         }
         publishWorld(frame)
-        guard guiding else { return }
 
-        // Never guide from a stale pose.
-        guard normal else {
-            if !trackingLost { trackingLost = true; audio.say("Hold still"); status = "Tracking lost" }
-            vibrate(.stop, now: frame.timestamp)
-            return
-        }
-        trackingLost = false
+        guard normal else { return }   // never warn from a stale pose
 
         let m = frame.camera.transform
         var ear = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
         ear.y += tuning.earHeightAbovePhone
         let forward = listenerForward(phone: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z))
 
-        let wps = waypoints
-        let out = nav.tick(listener: ear, forward: forward, now: frame.timestamp,
-                           waypoints: wps, obstacles: obstacles, tuning: tuning)
-        let index = out.index
+        motion.add(xz(ear), now: frame.timestamp, window: tuning.velocityWindow)
+        let w = Guidance.warning(listener: ear, velocity: motion.velocity, obstacles: navigationObstacles, tuning: tuning)
+        vibrate(w.haptic, now: frame.timestamp)
+        audio.update(listener: ear, forward: forward, warning: w, now: frame.timestamp)
 
-        if let i = out.hitObstacle {
-            success.notificationOccurred(.error)
-            audio.say("Bump")
-            status = "Hit obstacle \(i + 1). \(nav.hits) hit\(nav.hits == 1 ? "" : "s") so far"
-        }
-        if out.finished {
-            audio.playChime()
-            success.notificationOccurred(.success)
-            let hits = nav.hits
-            stopGuiding(announce: hits == 0 ? "Arrived, no obstacles hit" : "Arrived, \(hits) obstacle hit\(hits == 1 ? "" : "s")")
-            return
-        }
-        if out.arrived {
-            audio.playChime()
-            success.notificationOccurred(.success)
-            audio.say("Reached \(index) of \(wps.count). Next.")
-            status = "Guiding to \(index + 1) of \(wps.count)"
-        }
-        if guideAudioOn, !asker.busy, let callout = out.callout {
-            audio.say(callout, interrupt: false)
-            status = callout
-        }
-        vibrate(out.haptic, now: frame.timestamp)
-
-        var heard = out
-        if !guideAudioOn || asker.busy { heard.beaconPosition = nil }   // no pings; obstacle buzz still plays
-        audio.update(listener: ear, forward: forward, output: heard, now: frame.timestamp)
-
-        if frame.timestamp - lastMapUpdate > 0.1 || out.hitObstacle != nil {   // ~10 Hz is plenty for a map
+        if frame.timestamp - lastMapUpdate > 0.1 {   // ~10 Hz is plenty for a map
             lastMapUpdate = frame.timestamp
-            map = GuideMap(me: xz(ear), heading: Guidance.yaw(of: forward), waypoints: wps.map(xz), index: index,
-                           obstacles: obstacles, path: nav.path ?? [], touching: nav.touching,
-                           everHit: nav.everHit, hits: nav.hits)
+            map = GuideMap(me: xz(ear), heading: Guidance.yaw(of: forward), obstacles: detected,
+                           warned: w.obstacle, beepDistance: frame.timestamp - lastRangeHit < 0.4 ? rangeDistance : nil)
         }
     }
 }
@@ -646,7 +464,7 @@ extension ARController {
     private func setHeadTracking(_ on: Bool) {
         guard on != usingHeadTracking else { return }
         usingHeadTracking = on
-        if guiding { audio.say(on ? "Head tracking on" : "Using phone direction", interrupt: false) }
+        audio.say(on ? "Head tracking on" : "Using phone direction", interrupt: false)
     }
 }
 
