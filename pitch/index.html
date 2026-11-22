@@ -61,14 +61,6 @@
   @keyframes ping { from { transform: scale(.1); opacity: 1; } to { transform: scale(1); opacity: 0; } }
   @media (max-width: 700px) { .sonar { right: -10vmin; top: 22%; opacity: .35; } }
 
-  /* speaker notes */
-  #notes { position: fixed; left: 0; right: 0; bottom: 3px; z-index: 6; background: rgba(0,0,0,.92); border-top: 1px solid var(--cyan);
-           padding: 12px 16px calc(env(safe-area-inset-bottom) + 12px); font-size: 15px; line-height: 1.5; color: #ddd; display: none; max-height: 45vh; overflow-y: auto; }
-  body.notes #notes { display: block; }
-  #ctl { position: fixed; right: 12px; bottom: calc(env(safe-area-inset-bottom) + 12px); z-index: 7; display: flex; gap: 8px; }
-  body.notes #ctl { bottom: calc(45vh + 12px); }
-  #ctl button { background: rgba(0,0,0,.7); color: #fff; border: 1px solid #fff; padding: 8px 12px; font: 13px Hacked, monospace; letter-spacing: .08em; cursor: pointer; }
-  #ctl button[aria-pressed="true"] { background: #fff; color: #000; }
   #credit { position: fixed; left: 12px; bottom: calc(env(safe-area-inset-bottom) + 10px); z-index: 4; color: #555; font-size: 10px; }
   #credit a { color: inherit; }
   @media (prefers-reduced-motion: reduce) { *, *::before, *::after { animation: none !important; } }
@@ -140,8 +132,6 @@
 </section>
 
 <div id="seg"></div>
-<div id="notes" role="region" aria-label="Esineja märkmed"></div>
-<div id="ctl"><button id="nbtn" aria-pressed="false">Märkmed</button></div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
 
 <script>
@@ -156,15 +146,12 @@ function show(i) {
   slides.forEach((s, j) => s.classList.toggle('active', j === cur));
   segs.forEach((s, j) => { s.className = j < cur ? 'on' : j === cur ? 'now' : ''; });
   $('num').textContent = `${cur + 1}/${slides.length}`;
-  $('notes').innerHTML = slides[cur].querySelector('aside')?.innerHTML ?? '';
   location.hash = cur + 1;
 }
-$('nbtn').onclick = e => { e.stopPropagation(); const on = document.body.classList.toggle('notes'); $('nbtn').setAttribute('aria-pressed', on); };
 
 addEventListener('keydown', e => {
   if (['ArrowRight', 'PageDown', ' ', 'Enter'].includes(e.key)) { e.preventDefault(); show(cur + 1); }
   else if (['ArrowLeft', 'PageUp'].includes(e.key)) show(cur - 1);
-  else if (e.key === 'n') $('nbtn').click();
 });
 // Tap right two thirds = next, left third = back. Swipe works too.
 let x0 = null;
@@ -175,7 +162,7 @@ addEventListener('touchend', e => {
   if (Math.abs(dx) > 50) show(cur + (dx < 0 ? 1 : -1));
 });
 addEventListener('click', e => {
-  if (e.target.closest('#ctl, #notes, a')) return;
+  if (e.target.closest('a')) return;
   show(cur + (e.clientX < innerWidth / 3 ? -1 : 1));
 });
 show((+location.hash.slice(1) || 1) - 1);
