@@ -18,10 +18,12 @@ struct WorldSnapshot: Encodable, Equatable {
     let objects: [Object]
     let points: [Int32]     // x, y, z triples in millimetres: a third the JSON of floats
     let range: Float?       // forward clearance the phone is beeping for, nil when it is silent
+    let buzz: [Float]?      // x, y, z, volume, interval (s) of the directional buzz, nil when silent
 
     init(camera: SIMD3<Float>, forward: SIMD3<Float>, floorY: Float?,
-         objects: [(id: Int, label: String, obstacle: Obstacle)], points: [SIMD3<Float>], range: Float? = nil) {
+         objects: [(id: Int, label: String, obstacle: Obstacle)], points: [SIMD3<Float>], range: Float? = nil, buzz: Warning? = nil) {
         self.range = range
+        self.buzz = buzz.flatMap { w in w.position.map { [$0.x, $0.y, $0.z, w.volume, Float(w.buzzInterval)] } }
         cam = [camera.x, camera.y, camera.z]
         fwd = [forward.x, forward.y, forward.z]
         self.floorY = floorY

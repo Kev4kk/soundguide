@@ -49,7 +49,7 @@
   <option value="free">Free</option>
   <option value="follow">Follow</option>
   <option value="chase" selected>Third person</option>
-</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Beeps: off</button></div>
+</select></label><button id="labels" aria-pressed="false">Labels: off</button><button id="beeps" aria-pressed="false">Sound: off</button></div>
 <ul id="list" class="panel" aria-label="Detected objects" tabindex="0"></ul>
 </div>
 <div id="credit">Font: <a href="http://bit.ly/WatchDogsFont">HACKED by David Libeau</a></div>
@@ -131,15 +131,22 @@ labelsButton.onclick = () => {
   for (const b of boxes.values()) b.tag.visible = b.leader.visible = showLabels;
 };
 
-// Same proximity beep as the app (ProximityBeepTiming + SpatialAudio.proximityTone): 520 Hz, 65 ms.
-// Arrives a poll (~200 ms) late. Off by default; the click also unlocks browser audio.
-let audio = null, range = null, lastBeep = -Infinity;
+// Same sounds as the app, a poll (~200 ms) late. Off by default; the click also unlocks browser audio.
+// Beep: ProximityBeepTiming + SpatialAudio.proximityTone, 520 Hz, 65 ms, not spatial.
+// Buzz: 220 Hz square-ish from the obstacle's direction, HRTF-panned around the phone's pose. Use headphones.
+let phonePose = null, audio = null, range = null, lastBeep = -Infinity, buzz = null, lastBuzz = -Infinity, panner = null, buzzWave = null;
 const beepsButton = document.getElementById('beeps');
 beepsButton.onclick = () => {
   audio = audio ? (audio.close(), null) : new AudioContext();
-  lastBeep = -Infinity;   // each AudioContext's clock starts at 0
+  lastBeep = lastBuzz = -Infinity;   // each AudioContext's clock starts at 0
+  if (audio) {
+    // Same attenuation as the app's AVAudioEnvironmentNode.
+    panner = new PannerNode(audio, { panningModel: 'HRTF', distanceModel: 'inverse', refDistance: 1, maxDistance: 8, rolloffFactor: 0.5 });
+    panner.connect(audio.destination);
+    buzzWave = audio.createPeriodicWave([0, 0, 0, 0, 0, 0], [0, 1, 0, 1 / 3, 0, 1 / 5]);   // sin(f) + sin(3f)/3 + sin(5f)/5
+  }
   beepsButton.setAttribute('aria-pressed', !!audio);
-  beepsButton.textContent = `Beeps: ${audio ? 'on' : 'off'}`;
+  beepsButton.textContent = `Sound: ${audio ? 'on' : 'off'}`;
 };
 function beepTick() {
   if (audio && range > 0 && range <= 2) {
@@ -154,6 +161,31 @@ function beepTick() {
       g.gain.linearRampToValueAtTime(0, t + 0.065);
       o.connect(g).connect(audio.destination);
       o.start(t); o.stop(t + 0.07);
+    }
+  }
+  if (audio && buzz) {
+    const [x, y, z, volume, interval] = buzz, t = audio.currentTime, l = audio.listener;
+    if (t - lastBuzz >= interval) {
+      lastBuzz = t;
+      const [cx, cy, cz] = phonePose.cam, h = Math.hypot(phonePose.fwd[0], phonePose.fwd[2]);
+      const fx = h > 0.1 ? phonePose.fwd[0] / h : 0, fz = h > 0.1 ? phonePose.fwd[2] / h : -1;   // phone pointing down: face -z
+      if (l.positionX) {
+        l.positionX.value = cx; l.positionY.value = cy; l.positionZ.value = cz;
+        l.forwardX.value = fx; l.forwardY.value = 0; l.forwardZ.value = fz;
+        l.upX.value = 0; l.upY.value = 1; l.upZ.value = 0;
+      } else {   // Firefox has only the old setter API
+        l.setPosition(cx, cy, cz);
+        l.setOrientation(fx, 0, fz, 0, 1, 0);
+      }
+      panner.positionX.value = x; panner.positionY.value = y; panner.positionZ.value = z;
+      const o = new OscillatorNode(audio, { frequency: 220, periodicWave: buzzWave }), g = audio.createGain();
+      const peak = 0.6 * 0.8 * volume;
+      g.gain.setValueAtTime(0, t);
+      g.gain.linearRampToValueAtTime(peak, t + 0.005);
+      g.gain.setValueAtTime(peak, t + 0.075);
+      g.gain.linearRampToValueAtTime(0, t + 0.08);
+      o.connect(g).connect(panner);
+      o.start(t); o.stop(t + 0.085);
     }
   }
   setTimeout(beepTick, 20);
@@ -249,9 +281,11 @@ async function poll() {
   try {
     const s = await (await fetch('/state', { signal: AbortSignal.timeout(2000) })).json();
     range = s.range ?? null;
+    buzz = s.buzz ?? null;
+    phonePose = s;
     apply(s);
   } catch {
-    range = null;   // never beep from a stale reading
+    range = buzz = null;   // never sound from a stale reading
     status.textContent = 'Signal lost. Keep SoundGuide open and on the same Wi-Fi.';
   }
   setTimeout(poll, POLL_MS);

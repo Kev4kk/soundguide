@@ -49,6 +49,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private var lastRangeSample = -Double.infinity
     private var lastRangeHit = -Double.infinity
     private var rangeDistance: Float = 0
+    private var lastWarning = Warning()   // last frame's buzz, for the web viewer
     private var classifiedFloor: Float?
     @Published private(set) var usingHeadTracking = false
     @Published private(set) var motionAccessDenied = false
@@ -227,6 +228,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
     private func publishWorld(_ frame: ARFrame) {
         guard web.watched, frame.timestamp - lastWebUpdate >= 0.2 else { return }
+        if !trackingNormal { lastWarning = Warning() }   // the warning below is skipped then, so it would go stale
         lastWebUpdate = frame.timestamp
         let m = frame.camera.transform
         let p = SIMD3(m.columns.3.x, m.columns.3.y, m.columns.3.z)
@@ -234,7 +236,8 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
         web.publish(WorldSnapshot(camera: p, forward: -SIMD3(m.columns.2.x, m.columns.2.y, m.columns.2.z), floorY: floorY,
                                   objects: live ? tracks.confirmed(tuning: tuning) : [],
                                   points: live ? pointMap.nearest(5000, to: p) : [],
-                                  range: live && frame.timestamp - lastRangeHit < 0.4 ? rangeDistance : nil))
+                                  range: live && frame.timestamp - lastRangeHit < 0.4 ? rangeDistance : nil,
+                                  buzz: live ? lastWarning : nil))
     }
 
     /// One shared cube mesh drawn in wireframe, not twelve render entities per box.
@@ -421,6 +424,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
 
         motion.add(xz(ear), now: frame.timestamp, window: tuning.velocityWindow)
         let w = Guidance.warning(listener: ear, velocity: motion.velocity, obstacles: navigationObstacles, tuning: tuning)
+        lastWarning = w
         vibrate(max(w.haptic, rangeHaptic), now: frame.timestamp)   // one source at a time: the more urgent
         audio.update(listener: ear, forward: forward, warning: w, now: frame.timestamp)
 
