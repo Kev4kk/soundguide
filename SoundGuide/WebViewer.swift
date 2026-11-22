@@ -108,20 +108,27 @@ final class WebViewer {
         c.send(content: out, completion: .contentProcessed { _ in c.cancel() })
     }
 
-    /// The phone's IPv4 address on Wi-Fi (en0) or its own hotspot (bridge100).
-    static var address: String? {
+    /// The phone's IPv4 addresses: Wi-Fi (en0), its own hotspot (bridge100), and a Tailscale-style VPN.
+    /// Venue Wi-Fi often blocks device-to-device traffic, so the VPN address may be the only one that works.
+    static var addresses: [String] {
         var first: UnsafeMutablePointer<ifaddrs>?
-        guard getifaddrs(&first) == 0 else { return nil }
+        guard getifaddrs(&first) == 0 else { return [] }
         defer { freeifaddrs(first) }
-        var next = first
+        var found: [String] = [], next = first
         while let i = next?.pointee {
             next = i.ifa_next
-            guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET),
-                  ["en0", "bridge100"].contains(String(cString: i.ifa_name)) else { continue }
+            guard let sa = i.ifa_addr, sa.pointee.sa_family == UInt8(AF_INET) else { continue }
             var host = [CChar](repeating: 0, count: Int(NI_MAXHOST))
             guard getnameinfo(sa, socklen_t(sa.pointee.sa_len), &host, socklen_t(host.count), nil, 0, NI_NUMERICHOST) == 0 else { continue }
-            return String(cString: host)
+            let name = String(cString: i.ifa_name), ip = String(cString: host)
+            if ["en0", "bridge100"].contains(name) || (name.hasPrefix("utun") && isCGNAT(ip)) { found.append(ip) }
         }
-        return nil
+        return found
+    }
+
+    /// 100.64.0.0/10, the range Tailscale assigns from.
+    static func isCGNAT(_ ip: String) -> Bool {
+        let p = ip.split(separator: ".").compactMap { UInt8($0) }
+        return p.count == 4 && p[0] == 100 && (64...127).contains(p[1])
     }
 }

@@ -22,5 +22,10 @@ final class WebViewerTests: XCTestCase {
         XCTAssertEqual(WebViewer.route("GET /etc/passwd HTTP/1.1\r\n\r\n"), .notFound)
         XCTAssertEqual(WebViewer.route("POST /state HTTP/1.1\r\n\r\n"), .notFound)
         XCTAssertEqual(WebViewer.route(""), .notFound)
+
+        XCTAssertTrue(WebViewer.isCGNAT("100.64.0.121"))
+        XCTAssertTrue(WebViewer.isCGNAT("100.127.255.255"))
+        XCTAssertFalse(WebViewer.isCGNAT("100.128.0.1"))
+        XCTAssertFalse(WebViewer.isCGNAT("10.224.1.111"))
     }
 }

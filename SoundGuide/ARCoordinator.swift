@@ -85,7 +85,7 @@ final class ARController: NSObject, ObservableObject, ARSessionDelegate {
     private let audio = SpatialAudio()
     private let web = WebViewer()
     private var lastWebUpdate: TimeInterval = 0
-    var webURL: String? { WebViewer.address.map { "http://\($0):\(WebViewer.port)" } }
+    var webURLs: [String] { WebViewer.addresses.map { "http://\($0):\(WebViewer.port)" } }
     lazy var asker = Asker { [weak self] in self?.audio.say($0, interrupt: false) }
     private let head = HeadTracker()
     // Phone heading and AirPods yaw captured together; assumes you face along the phone at that moment.
